@@ -7,7 +7,7 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})  # erlaubt Anfragen von GitHub Pages
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-MODEL = os.environ.get("OPENAI_MODEL", "gpt-5-nano")  # Default-Modell
+MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")  # Default-Modell
 
 # -------------------------------------------------
 #   Chat-Nachricht vorbereiten
