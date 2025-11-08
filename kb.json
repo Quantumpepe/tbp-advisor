@@ -3,9 +3,9 @@
     "name": "TurboPepe (TBP)",
     "chain": "Polygon (POL)",
     "dex": "SushiSwap",
-    "goal": "Listing auf CoinMarketCap (CMC)",
+    "contract": "0x50c40e03552A42fbE41b2507d522F56d7325D1F2",
     "links": {
-      "website": "DEIN_LINK",
+      "website": "https://quantumpepe.github.io/TurboPepe/",
       "dex_widget": "https://www.geckoterminal.com/en/polygon_pos/pools/0x945c73101e11cc9e529c839d1d75648d04047b0b",
       "telegram": "https://t.me/turbopepe25",
       "x": "https://x.com/TurboPepe2025"
@@ -25,9 +25,8 @@
     "use_of_proceeds": "Promotion/Marketing"
   },
   "vision": {
-    "q1": "AI-Bot voll live auf TG & X",
-    "q2": "Escrow-Zahlungen (locked until release)",
-    "q3": "In-App-Wallet + Chat",
-    "north_star": "AI-getriebenes Meme-Ökosystem"
+    "q1": "AI-Bot live (Website & TG/X)",
+    "q2": "CMC/CG Listing",
+    "q3": "Escrow-Zahlungen, In-App-Wallet & Chat"
   }
 }
