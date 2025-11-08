@@ -24,22 +24,22 @@ def health():
 def build_messages(payload):
     question = (payload.get("question") or "").strip()
     ctx = payload.get("context") or []
-    user_lang = payload.get("user_lang") or "en"
+    user_lang = payload.get("user_lang") or "de"
 
     system = (
-        "Reply concise, precise, helpful, with light humor.\n"
-        "No empty promises. If unsure, say so and point to on-chain links."
+        "Antworte kurz, präzise, hilfreich und mit leichtem Humor. "
+        "Keine leeren Versprechen. Wenn unsicher, verweise auf On-Chain-Daten."
     )
-    # einfache Kontext-Zusammenführung
+
     history = "\n".join(ctx[-8:]) if isinstance(ctx, list) else ""
 
-    prompt = f"""You are the official assistant for TurboPepe-AI (TBP).
-Language: {user_lang}
+    prompt = f"""Du bist der offizielle Assistent von TurboPepe-AI (TBP).
+Sprache: {user_lang}
 
-Context:
+Kontext:
 {history}
 
-User question:
+Frage des Nutzers:
 {question}
 """
     return system, prompt
@@ -58,21 +58,20 @@ def ask():
         resp = client.responses.create(
             model=MODEL,
             input=[
-                {"role":"system", "content": system},
-                {"role":"user",   "content": prompt}
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt}
             ]
         )
-        # Text robust extrahieren (Responses API)
+
         text = ""
         for item in resp.output or []:
             if getattr(item, "type", "") == "output_text":
                 text += item.text
 
-        text = text.strip() or "I couldn’t retrieve data right now. Please try again."
+        text = text.strip() or "Ich konnte keine Antwort abrufen. Bitte später erneut versuchen."
         return jsonify(answer=text, model=MODEL), 200
 
     except Exception as e:
-        # für Logs UND saubere Frontend-Fehleranzeige
         return jsonify(error="BACKEND_EXCEPTION", detail=str(e)), 500
 
 if __name__ == "__main__":
