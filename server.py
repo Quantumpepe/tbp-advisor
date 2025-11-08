@@ -81,7 +81,7 @@ def compute_caps(price:float)->Tuple[float,float]:
 
 def persona(lang_de:bool)->str:
     base = (
-        "You are TBP (TurboPepe), an AI-token assistant. "
+        "You are TBP (TurboPepe-AI), an AI-token assistant. "
         "Be concise (2–4 sentences), factual, slightly humorous (🐸), no financial advice, no price predictions. "
         "Use the provided KB facts; if asked about live price/MC/LP, prefer tool results. "
     )
