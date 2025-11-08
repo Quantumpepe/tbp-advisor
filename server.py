@@ -1,71 +1,201 @@
 import os, json, re, time
+from typing import Dict, Any, Tuple
+import requests
 from flask import Flask, request, jsonify, make_response
 
-# --- Config ---
-ALLOW_ORIGIN = os.getenv("ALLOW_ORIGIN", "*")  # setze hier später deine Domain
-OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")   # optional; wenn leer -> nur FAQ
-MODEL = os.getenv("MODEL", "openrouter/auto")  # z.B. "openrouter/auto"
+# ----------------- Config -----------------
+ALLOW_ORIGIN   = os.getenv("ALLOW_ORIGIN", "*")
+OPENROUTER_KEY = os.getenv("OPENROUTER_KEY", "")    # optional; if empty -> no LLM fallback
+MODEL          = os.getenv("MODEL", "openrouter/auto")
+DEX_PAIR       = os.getenv("DEX_PAIR", "0x945c73101e11cc9e529c839d1d75648d04047b0b")  # Sushi POL TBP pair
 
-# --- Load KB (TBP Fakten) ---
+# ----------------- Load KB -----------------
 with open("kb.json", "r", encoding="utf-8") as f:
-    KB = json.load(f)
+    KB: Dict[str, Any] = json.load(f)
 
-FAQ = [
-    (re.compile(r"(price|chart|kurs)", re.I),
-     "Live price & chart are in the GeckoTerminal widget on the site. 📊"),
-    (re.compile(r"(buy|kauf|how .*buy)", re.I),
-     "Connect wallet → open SushiSwap → swap for TBP → confirm. ✅"),
-    (re.compile(r"(tokenomics|supply|burn|owner|lp)", re.I),
-     "Total ~190B; burned ~10B; ~130B in LP; owner ~14B (listings/ops)."),
-    (re.compile(r"(ai|what .*tbp|who .*you)", re.I),
-     "I’m TBP, an AI-Token on Polygon. I post & explain myself and watch the pool. 🧠🐸"),
-    (re.compile(r"(cmc|coingecko|listing)", re.I),
-     "Goal: CMC listing — focus on transparency, activity & community."),
-    (re.compile(r"(nft|tbp gold)", re.I),
-     "TBP Gold: 300 NFTs × 300 POL; proceeds fund promotion for TBP.")
-]
+TOKEN = KB["project"]["name"]
+TOK   = "TBP"
 
-SYSTEM_PERSONA = (
-    "You are TBP (TurboPepe), a polite, witty, fact-driven AI-token assistant. "
-    "Keep answers short (2–4 sentences). No financial advice, no price targets, no DMs. "
-    "Always stay consistent with the provided KB facts. "
-    "If asked about price/chart, refer to the GeckoTerminal widget. "
-    "Tone: friendly, concise, lightly humorous. Language: match user input."
-)
+TOTAL = int(KB["tokenomics"]["total_supply"])
+BURN  = int(KB["tokenomics"]["burned"])
+OWNER = int(KB["tokenomics"]["owner_balance"])
+LP_TB = int(KB["tokenomics"]["lp_pool_tbps"])
 
+# strict circulating (exkl. burned + owner)
+CIRC  = max(TOTAL - BURN - OWNER, 0)
+
+# ----------------- App & simple rate limit -------------
 app = Flask(__name__)
-
-# very simple in-memory rate limit (per IP)
-RATE = {}
-WINDOW = 30  # sec
-MAX_REQ = 10
+RATE: Dict[str, list] = {}
+WINDOW=30; MAX_REQ=20
 
 def limited(ip: str) -> bool:
-    now = time.time()
-    bucket = RATE.get(ip, [])
-    bucket = [t for t in bucket if now - t < WINDOW]
-    if len(bucket) >= MAX_REQ:
-        RATE[ip] = bucket
-        return True
-    bucket.append(now)
-    RATE[ip] = bucket
-    return False
+    now=time.time()
+    q=RATE.get(ip,[])
+    q=[t for t in q if now-t<WINDOW]
+    if len(q)>=MAX_REQ:
+        RATE[ip]=q; return True
+    q.append(now); RATE[ip]=q; return False
 
 def cors(resp):
-    resp.headers["Access-Control-Allow-Origin"] = ALLOW_ORIGIN
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    resp.headers["Access-Control-Allow-Origin"]=ALLOW_ORIGIN
+    resp.headers["Access-Control-Allow-Headers"]="Content-Type"
+    resp.headers["Access-Control-Allow-Methods"]="POST, OPTIONS, GET"
     return resp
 
 @app.route("/health")
-def health():
-    return "ok", 200
+def health(): return "ok", 200
 
-@app.route("/ask", methods=["POST", "OPTIONS"])
+# ----------------- Helpers: language & intents ----------
+RE_PRICE   = re.compile(r"\b(price|kurs|preis|chart|mc|market ?cap|fdv|lp|liquidity|pool)\b", re.I)
+RE_BUY     = re.compile(r"\b(buy|kaufen|how.*buy|swap|kauf)\b", re.I)
+RE_SUPPLY  = re.compile(r"\b(supply|angebot|total|burn|burned|owner|circulating|umlauf)\b", re.I)
+RE_NFT     = re.compile(r"\b(nft|gold)\b", re.I)
+RE_LINK    = re.compile(r"\b(link|website|telegram|twitter|x|gecko|dextools|contract|adresse|address)\b", re.I)
+RE_ROADMAP = re.compile(r"\b(roadmap|ziel|goal|milestone|listing|cmc|coingecko)\b", re.I)
+RE_AI      = re.compile(r"\b(ai|ki|what.*tbp|wer bist du|who are you)\b", re.I)
+RE_SECURITY= re.compile(r"\b(security|sicherheit|lock|burn proof|renounce|rug|audit)\b", re.I)
+
+def is_german(text:str)->bool:
+    t=text.lower()
+    return any(x in t for x in [" der "," die "," das "," und "," oder ","nicht","wie","preis","kaufen","warum","wann","wo","wer","was","mit","ich","du","wir","euch","euro","franken","kurs"])
+
+def fmt_int(n:int)->str:
+    return f"{n:,}".replace(",", " ")
+
+def fetch_dex_pair(pair_addr:str)->Tuple[float, Dict[str, Any]]:
+    """Return (price_usd, raw_pair_dict). price_usd=0.0 if unknown."""
+    url=f"https://api.dexscreener.com/latest/dex/pairs/polygon/{pair_addr}"
+    try:
+        r=requests.get(url, timeout=12)
+        r.raise_for_status()
+        data=r.json().get("pair") or {}
+        price=float(data.get("priceUsd") or 0)
+        return price, data
+    except Exception:
+        return 0.0, {}
+
+def compute_caps(price:float)->Tuple[float,float]:
+    """(circulating_mc, fdv)"""
+    return price*CIRC, price*TOTAL
+
+def persona(lang_de:bool)->str:
+    base = (
+        "You are TBP (TurboPepe), an AI-token assistant. "
+        "Be concise (2–4 sentences), factual, slightly humorous (🐸), no financial advice, no price predictions. "
+        "Use the provided KB facts; if asked about live price/MC/LP, prefer tool results. "
+    )
+    if lang_de:
+        base += "Antwortsprache: Deutsch."
+    else:
+        base += "Answer in English."
+    return base
+
+def llm_answer(prompt:str, lang_de:bool)->str:
+    if not OPENROUTER_KEY:
+        # Fallback minimal message if no LLM key configured
+        if lang_de:
+            return "Ich bin TBP, ein AI-Token auf Polygon. Für Live-Preis/Chart siehe das GeckoTerminal-Widget unten. Frag mich nach Tokenomics, Sicherheit oder wie man kauft 🐸."
+        return "I’m TBP, an AI-token on Polygon. For live price/chart see the GeckoTerminal widget below. Ask me about tokenomics, security, or how to buy 🐸."
+    try:
+        r = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type":"application/json"},
+            json={
+                "model": MODEL,
+                "messages":[
+                    {"role":"system","content": persona(lang_de) + f" KB: {json.dumps(KB, ensure_ascii=False)}"},
+                    {"role":"user","content": prompt}
+                ],
+                "max_tokens": 220,
+                "temperature": 0.6
+            },
+            timeout=25
+        )
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"].strip()
+    except Exception:
+        return ("Ich lerne noch weiter – schau dir unten den Live-Chart an. 🐸"
+                if lang_de else
+                "Still learning — check the live chart below meanwhile. 🐸")
+
+def answer_price(lang_de:bool)->str:
+    price, pair = fetch_dex_pair(DEX_PAIR)
+    if price<=0:
+        return ("Preis/Chart derzeit nicht verfügbar. Versuche es gleich erneut. 🐸"
+                if lang_de else
+                "Price/chart currently unavailable. Try again shortly. 🐸")
+    circ, fdv = compute_caps(price)
+    lp_usd = pair.get("liquidity",{}).get("usd")
+    price_s = f"${price:.12f}"
+    circ_s  = f"${circ:,.2f}"
+    fdv_s   = f"${fdv:,.2f}"
+    lp_s    = f"${lp_usd:,.0f}" if lp_usd else "—"
+    if lang_de:
+        return f"Aktueller Preis: {price_s}. Geschätzte MC (Umlauf): {circ_s}, FDV: {fdv_s}. Liquidity: {lp_s}. Live-Chart unten auf der Seite. 🐸"
+    return f"Current price: {price_s}. Est. circulating MC: {circ_s}, FDV: {fdv_s}. Liquidity: {lp_s}. Live chart below. 🐸"
+
+def answer_buy(lang_de:bool)->str:
+    link = KB["project"]["links"]["website"]
+    sushi = f"https://www.sushi.com/polygon/swap?token0=NATIVE&token1={KB['project'].get('contract','0x50c40e03552A42fbE41b2507d522F56d7325D1F2')}"
+    if lang_de:
+        return f"Wallet verbinden (Polygon) → {sushi} öffnen → MATIC zu {TOK} tauschen → bestätigen. Contract: {KB['project'].get('contract','—')}. Website: {link}"
+    return f"Connect wallet (Polygon) → open {sushi} → swap MATIC to {TOK} → confirm. Contract: {KB['project'].get('contract','—')}. Website: {link}"
+
+def answer_supply(lang_de:bool)->str:
+    if lang_de:
+        return (f"Total: {fmt_int(TOTAL)} {TOK}, verbrannt: {fmt_int(BURN)}, LP ca.: {fmt_int(LP_TB)}, "
+                f"Owner ca.: {fmt_int(OWNER)}, Umlauf (≈Total−Burn−Owner): {fmt_int(CIRC)}.")
+    return (f"Total: {fmt_int(TOTAL)} {TOK}, burned: {fmt_int(BURN)}, LP ~{fmt_int(LP_TB)}, "
+            f"owner ~{fmt_int(OWNER)}, circulating (≈Total−Burn−Owner): {fmt_int(CIRC)}.")
+
+def answer_links(lang_de:bool)->str:
+    links=KB["project"]["links"]
+    extras=[]
+    if lang_de:
+        extras.append(f"Website: {links.get('website','—')}")
+        extras.append(f"Telegram: {links.get('telegram','—')}")
+        extras.append(f"X/Twitter: {links.get('x','—')}")
+        extras.append(f"Chart: {links.get('dex_widget','—')}")
+        extras.append(f"Contract: {KB['project'].get('contract','—')}")
+        return " • ".join(extras)
+    else:
+        extras.append(f"Website: {links.get('website','—')}")
+        extras.append(f"Telegram: {links.get('telegram','—')}")
+        extras.append(f"X/Twitter: {links.get('x','—')}")
+        extras.append(f"Chart: {links.get('dex_widget','—')}")
+        extras.append(f"Contract: {KB['project'].get('contract','—')}")
+        return " • ".join(extras)
+
+def answer_nft(lang_de:bool)->str:
+    n=KB["nft"]
+    if lang_de:
+        return f"TBP Gold NFT: {n['count']} Stück à {n['price_per_nft_POL']} POL – Erlös fließt in Promotion. Link: https://app.manifold.xyz/c/turbopepe-gold"
+    return f"TBP Gold NFT: {n['count']} supply at {n['price_per_nft_POL']} POL each — proceeds fund promotion. Link: https://app.manifold.xyz/c/turbopepe-gold"
+
+def answer_roadmap(lang_de:bool)->str:
+    if lang_de:
+        return ("Ziele: AI-Bot voll live, Transparenz/Community, CoinGecko & CMC Listing. "
+                "Danach Utility: Escrow-Zahlungen (Freigabe nach Leistung), In-App Wallet & Chat, Partnerschaften. 🐸")
+    return ("Goals: AI bot fully live, transparency/community, CoinGecko & CMC listings. "
+            "Next: escrow payments (release-on-approval), in-app wallet & chat, partnerships. 🐸")
+
+def answer_ai(lang_de:bool)->str:
+    if lang_de:
+        return "Ich bin TBP, ein AI-Token auf Polygon. Ich poste Memes, beantworte Fragen und überwache Pool/Stats. Für Preis/Chart nutze das Widget unten. 🐸"
+    return "I’m TBP, an AI-token on Polygon. I post memes, answer questions, and watch pool/stats. For price/chart use the widget below. 🐸"
+
+def answer_security(lang_de:bool)->str:
+    burn_tx = "https://polygonscan.com/tx/0x6cd24c5c4f8376961e21aa892b966329c09d4fa7490e699e1ce26765459ddf1a"
+    if lang_de:
+        return f"Sicherheit: Contract verifiziert, LP geburnt/gelockt (siehe Nachweis: {burn_tx}). Keine Steuern. Owner-Bestand transparent (~{fmt_int(OWNER)} {TOK}) für Listings/Operations."
+    return f"Security: Contract verified, LP burned/locked (proof: {burn_tx}). No taxes. Owner balance transparent (~{fmt_int(OWNER)} {TOK}) for listings/ops."
+
+# ----------------- Main endpoint -----------------------
+@app.route("/ask", methods=["POST","OPTIONS"])
 def ask():
-    if request.method == "OPTIONS":
-        return cors(make_response(("", 200)))
-
+    if request.method=="OPTIONS":
+        return cors(make_response(("",200)))
     ip = request.headers.get("X-Forwarded-For", request.remote_addr or "0.0.0.0")
     if limited(ip):
         return cors(make_response(jsonify({"answer": "Slow down a bit 🐸", "safety":"rate_limited"}), 429))
@@ -73,57 +203,31 @@ def ask():
     try:
         payload = request.get_json(force=True) or {}
     except Exception:
-        return cors(make_response(jsonify({"answer":"Bad request","safety":"error"}), 400))
+        return cors(make_response(jsonify({"answer":"Bad request","safety":"error"}),400))
 
-    question = (payload.get("question") or "").strip()
-    context  = payload.get("context") or []
-    need_image = bool(payload.get("need_image"))
+    q = (payload.get("question") or "").strip()
+    context = payload.get("context") or []
+    lang_de = is_german(q + " " + " ".join(context))
 
-    if not question:
-        return cors(make_response(jsonify({"answer":"Ask me anything about TBP.","safety":"ok"}), 200))
+    if not q:
+        out = "Frag mich etwas über TBP (Preis, Tokenomics, Sicherheit, Kaufen, Roadmap). 🐸" if lang_de \
+              else "Ask me anything about TBP (price, tokenomics, security, how to buy, roadmap). 🐸"
+        return cors(make_response(jsonify({"answer": out, "safety":"ok"}), 200))
 
-    # 1) FAQ fast path
-    for rex, ans in FAQ:
-        if rex.search(question):
-            return cors(make_response(jsonify({"answer": ans, "image_url": None, "safety":"ok"}), 200))
+    # intent routing with live tools
+    if RE_PRICE.search(q):    return cors(make_response(jsonify({"answer":answer_price(lang_de)}),200))
+    if RE_SUPPLY.search(q):   return cors(make_response(jsonify({"answer":answer_supply(lang_de)}),200))
+    if RE_BUY.search(q):      return cors(make_response(jsonify({"answer":answer_buy(lang_de)}),200))
+    if RE_LINK.search(q):     return cors(make_response(jsonify({"answer":answer_links(lang_de)}),200))
+    if RE_NFT.search(q):      return cors(make_response(jsonify({"answer":answer_nft(lang_de)}),200))
+    if RE_ROADMAP.search(q):  return cors(make_response(jsonify({"answer":answer_roadmap(lang_de)}),200))
+    if RE_AI.search(q):       return cors(make_response(jsonify({"answer":answer_ai(lang_de)}),200))
+    if RE_SECURITY.search(q): return cors(make_response(jsonify({"answer":answer_security(lang_de)}),200))
 
-    # 2) LLM fallback (optional)
-    if not OPENROUTER_KEY:
-        # No LLM key — return safe default short answer with KB facts
-        kb_line = f"TBP runs on Polygon. Supply ~{KB['tokenomics']['total_supply']:,}, burned ~{KB['tokenomics']['burned']:,}, LP ~{KB['tokenomics']['lp_pool_tbps']:,}, owner ~{KB['tokenomics']['owner_balance']:,}."
-        out = f"I’m TBP, an AI-Token. {kb_line} For price, see the GeckoTerminal widget."
-        return cors(make_response(jsonify({"answer": out, "image_url": None, "safety":"ok"}), 200))
-
-    # With OpenRouter (or OpenAI-compatible) — minimal call
-    import requests
-    messages = [
-        {"role":"system","content": SYSTEM_PERSONA + f"\nKB: {json.dumps(KB, ensure_ascii=False)}"},
-        {"role":"user","content": f"Context: {context[-10:]}\nQuestion: {question}\nAnswer in 2–4 sentences."}
-    ]
-    try:
-        r = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": MODEL,
-                "messages": messages,
-                "max_tokens": 180,
-                "temperature": 0.6
-            },
-            timeout=20
-        )
-        r.raise_for_status()
-        ans = r.json()["choices"][0]["message"]["content"].strip()
-    except Exception:
-        ans = "I’m online and learning. Check the GeckoTerminal widget for price while I fetch more context. 🐸"
-
-    # (optional) image generation hook – hier vorerst deaktiviert:
-    image_url = None
-
-    return cors(make_response(jsonify({"answer": ans, "image_url": image_url, "safety":"ok"}), 200))
+    # fallback to LLM (optional)
+    prompt = f"Context: {context[-10:]}\nQuestion: {q}\nRespond succinctly."
+    out = llm_answer(prompt, lang_de)
+    return cors(make_response(jsonify({"answer": out, "safety":"ok"}),200))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 3000)))
