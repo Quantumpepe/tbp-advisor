@@ -7,7 +7,7 @@ app = Flask(__name__)
 CORS(app)
 
 # ---- Config & OpenAI client ----
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5")
 API_KEY = os.environ.get("OPENAI_API_KEY")
 
 client = OpenAI(api_key=API_KEY)
