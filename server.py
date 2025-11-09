@@ -1,521 +1,554 @@
-# server.py — TBP-AI v5.6
-# Adds: image gen (/img, /meme), reacts to user photos (remix flow),
-# occasional auto-meme posts, keeps price/stats, explain-every-10h-or-25msgs, DE/EN, humor.
+# server.py — TBP-AI V5 (Web + Telegram) with Humor, Auto-Posts, Live Stats, and Memory
 # -*- coding: utf-8 -*-
 
-import os, re, base64, time, random, threading, requests
+import os, re, json, time, sqlite3, random, threading
+from datetime import datetime, timedelta
+
+import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-# =========================
-# CONFIG
-# =========================
-BOT_NAME       = "TBP-AI"
-MODEL_NAME     = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-IMG_MODEL      = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+# ================================================================
+# CONFIG / CONSTANTS
+# ================================================================
+BOT_NAME        = "TBP-AI"
+MODEL_NAME      = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_API_KEY  = os.environ.get("OPENAI_API_KEY", "").strip()
+TELEGRAM_TOKEN  = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+DB_PATH         = os.environ.get("MEMORY_DB", "memory.db")
 
 # TBP (Polygon)
 TBP_CONTRACT = "0x50c40e03552A42fbE41b2507d522F56d7325D1F2"
-TBP_PAIR     = "0x945c73101e11cc9e529c839d1d75648d04047b0b"
+TBP_PAIR     = "0x945c73101e11cc9e529c839d1d75648d04047b0b"   # Sushi Pair (Polygon)
 
 LINKS = {
-    "website":      "https://quantumpepe.github.io/TurboPepe/",
-    "buy":          f"https://www.sushi.com/polygon/swap?token0=NATIVE&token1={TBP_CONTRACT}",
-    "dextools":     f"https://www.dextools.io/app/en/polygon/pair-explorer/{TBP_PAIR}",
-    "dexscreener":  f"https://dexscreener.com/polygon/{TBP_PAIR}",
-    "gecko":        f"https://www.geckoterminal.com/en/polygon_pos/pools/{TBP_PAIR}?embed=1",
-    "telegram":     "https://t.me/turbopepe25",
-    "x":            "https://x.com/TurboPepe2025",
-    "contract":     f"https://polygonscan.com/token/{TBP_CONTRACT}",
+    "website":       "https://quantumpepe.github.io/TurboPepe/",
+    "buy":           f"https://www.sushi.com/polygon/swap?token0=NATIVE&token1={TBP_CONTRACT}",
+    "dextools":      f"https://www.dextools.io/app/en/polygon/pair-explorer/{TBP_PAIR}",
+    "dexscreener":   f"https://dexscreener.com/polygon/{TBP_PAIR}",
+    "gecko":         f"https://www.geckoterminal.com/en/polygon_pos/pools/{TBP_PAIR}?embed=1",
+    "telegram":      "https://t.me/turbopepe25",
+    "x":             "https://x.com/TurboPepe2025",
+    "contract_scan": f"https://polygonscan.com/token/{TBP_CONTRACT}",
 }
 
+# Token supply (für einfache MC/FDV-Rechnung)
+MAX_SUPPLY   = 190_000_000_000
+BURNED       = 10_000_000_000
+OWNER        = 14_000_000_000
+CIRC_SUPPLY  = MAX_SUPPLY - BURNED - OWNER
+
+# Auto-post Regeln
+AUTOPOST_EVERY_HOURS   = 10
+AUTOPOST_EVERY_MESSAGES= 25
+
+# App
 app = Flask(__name__)
 CORS(app)
 
-# =========================
-# PREFS / AUTOP / EXPLAIN
-# =========================
-PREFS = {}     # chat_id -> {"lang":"auto|de|en","tone":"pro|fun"}
-AUTOP = {}     # chat_id -> {"on":bool,"interval":sec,"next":ts,"cycle":int}
-EXPLAIN = {}   # chat_id -> {"last":ts,"count":int}
-EXPLAIN_INTERVAL   = 10 * 3600   # 10h
-EXPLAIN_COUNT_TRIG = 25          # ~25 user msgs
+# ================================================================
+# SQLite (Memory)
+# ================================================================
+def db():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
 
-def now(): return int(time.time())
-def get_prefs(chat_id):
-    d = PREFS.get(chat_id) or {"lang":"auto","tone":"pro"}
-    PREFS[chat_id] = d; return d
-def start_autopost(chat_id, minutes=60):
-    sec = max(300, int(minutes)*60)
-    AUTOP[chat_id] = {"on":True, "interval":sec, "next":now()+sec, "cycle":0}
-def stop_autopost(chat_id):
-    AUTOP[chat_id] = {"on":False, "interval":0, "next":0, "cycle":0}
-def inc_explain_counter(chat_id):
-    st = EXPLAIN.get(chat_id) or {"last":0,"count":0}
-    st["count"] = st.get("count",0)+1; EXPLAIN[chat_id]=st
-def should_explain(chat_id):
-    st = EXPLAIN.get(chat_id) or {"last":0,"count":0}
-    return st["count"]>=EXPLAIN_COUNT_TRIG or (now()-st.get("last",0))>=EXPLAIN_INTERVAL
-def mark_explained(chat_id):
-    EXPLAIN[chat_id] = {"last":now(),"count":0}
+def init_db():
+    conn = db()
+    conn.execute("""CREATE TABLE IF NOT EXISTS messages(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT, sender TEXT, text TEXT, ts TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS facts(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        k TEXT UNIQUE, v TEXT, source TEXT, ts TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS state(
+        k TEXT PRIMARY KEY, v TEXT
+    )""")
+    conn.commit()
 
-# =========================
-# LIVE DATA (price/stats)
-# =========================
-def _dexs_pair_obj():
+def log_msg(chat_id, sender, text):
     try:
-        r = requests.get(f"https://api.dexscreener.com/latest/dex/pairs/polygon/{TBP_PAIR}", timeout=7)
-        j = r.json() if r.ok else {}
-        if isinstance(j.get("pair"), dict): return j["pair"]
-        pairs = j.get("pairs")
-        if isinstance(pairs, list) and pairs: return pairs[0]
-    except Exception: pass
-    return {}
+        conn = db()
+        conn.execute("INSERT INTO messages(chat_id,sender,text,ts) VALUES(?,?,?,?)",
+                     (str(chat_id), sender, text, datetime.utcnow().isoformat()+"Z"))
+        conn.commit()
+    except Exception:
+        pass
 
-def get_live_price():
+def set_fact(k, v, source="telegram"):
+    k = (k or "").strip().lower()
+    v = (v or "").strip()
+    if not k or not v: return False
     try:
-        r = requests.get(
-            f"https://api.geckoterminal.com/api/v2/networks/polygon_pos/pools/{TBP_PAIR}",
-            timeout=7,
+        conn = db()
+        conn.execute(
+            "INSERT INTO facts(k,v,source,ts) VALUES(?,?,?,?) "
+            "ON CONFLICT(k) DO UPDATE SET v=excluded.v, ts=excluded.ts, source=excluded.source",
+            (k, v, source, datetime.utcnow().isoformat()+"Z")
         )
-        if r.ok:
-            attrs = (r.json().get("data") or {}).get("attributes") or {}
-            p = attrs.get("base_token_price_usd")
-            if p is not None:
-                p = float(p)
-                if p>0: return p
-    except Exception: pass
+        conn.commit()
+        return True
+    except Exception:
+        return False
+
+def del_fact(k):
     try:
-        po = _dexs_pair_obj()
-        p = po.get("priceUsd")
-        if p is not None:
-            p = float(p)
-            if p>0: return p
-    except Exception: pass
+        conn = db()
+        conn.execute("DELETE FROM facts WHERE k=?", ((k or "").strip().lower(),))
+        conn.commit()
+        return conn.total_changes > 0
+    except Exception:
+        return False
+
+def list_facts(limit=20):
+    try:
+        cur = db().execute("SELECT k,v FROM facts ORDER BY ts DESC LIMIT ?", (limit,))
+        return cur.fetchall()
+    except Exception:
+        return []
+
+def get_state(key, default=None):
+    try:
+        cur = db().execute("SELECT v FROM state WHERE k=?", (key,))
+        row = cur.fetchone()
+        return json.loads(row[0]) if row else default
+    except Exception:
+        return default
+
+def set_state(key, value):
+    try:
+        conn = db()
+        conn.execute(
+            "INSERT INTO state(k,v) VALUES(?,?) "
+            "ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+            (key, json.dumps(value))
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+# ================================================================
+# Helpers: Language, Sanitizing, Buttons
+# ================================================================
+WORD_PRICE = re.compile(r"\b(preis|price|kurs|chart|charts)\b", re.I)
+GER_DET    = re.compile(r"\b(der|die|das|wie|was|warum|kann|preis|kurs|tokenomics|listung|hilfe|kaufen)\b", re.I)
+
+def is_de(text: str) -> bool:
+    return bool(GER_DET.search((text or "").lower()))
+
+def sanitize_persona(ans: str) -> str:
+    if not ans: return ""
+    if re.search(r"\bNFT\b", ans, re.I):
+        ans = re.sub(r"\bNFTs?.*", "", ans, flags=re.I).strip()
+    ans = re.sub(r"(?i)(financial advice|finanzberatung)", "information", ans)
+    return ans
+
+def inline_buttons(lang: str):
+    lab = {
+        "buy":  "Sushi",
+        "chart":"Chart",
+        "scan": "Scan",
+        "site": "Site",
+    }
+    kb = {
+        "inline_keyboard": [[
+            {"text": lab["buy"],  "url": LINKS["buy"]},
+            {"text": lab["chart"],"url": LINKS["dexscreener"]},
+            {"text": lab["scan"], "url": LINKS["contract_scan"]},
+            {"text": lab["site"], "url": LINKS["website"]},
+        ]]
+    }
+    return kb
+
+# ================================================================
+# Live Price + Market Stats
+# ================================================================
+def get_live_price():
+    # GeckoTerminal
+    try:
+        url = f"https://api.geckoterminal.com/api/v2/networks/polygon_pos/pools/{TBP_PAIR}"
+        r = requests.get(url, timeout=6); r.raise_for_status()
+        j = r.json()
+        attrs = j.get("data", {}).get("attributes", {})
+        v = attrs.get("base_token_price_usd")
+        p = float(v) if v not in (None,"","null") else None
+        if p and p > 0: return p
+    except Exception:
+        pass
+    # Dexscreener
+    try:
+        url = f"https://api.dexscreener.com/latest/dex/pairs/polygon/{TBP_PAIR}"
+        r = requests.get(url, timeout=6); r.raise_for_status()
+        d = r.json()
+        pair = d.get("pair") or (d.get("pairs") or [{}])[0]
+        v = pair.get("priceUsd")
+        p = float(v) if v not in (None,"","null") else None
+        if p and p > 0: return p
+    except Exception:
+        pass
     return None
 
 def get_market_stats():
-    po = _dexs_pair_obj()
-    try: change = po.get("priceChange24h")
-    except: change = None
-    try: liq = (po.get("liquidity") or {}).get("usd")
-    except: liq = None
-    try: vol = (po.get("volume") or {}).get("h24") or po.get("volume24h")
-    except: vol = None
-    return {"change_24h": change, "liquidity": liq, "volume": vol}
-
-def format_price_block(lang="en"):
-    p = get_live_price()
-    s = get_market_stats()
-    if not p:
-        return "💰 Price unavailable" if lang=="en" else "💰 Preis derzeit nicht verfügbar"
-    out = [("💰 Price" if lang=="en" else "💰 Preis")+f": ${p:0.12f}"]
-    if s.get("change_24h") not in (None,"null",""):
-        out.append("📈 24h: " + str(s["change_24h"]) + "%")
-    if s.get("liquidity") not in (None,"null",""):
-        try: out.append(("💧 Liquidity" if lang=="en" else "💧 Liquidität")+f": ${int(float(s['liquidity'])):,}")
-        except: pass
-    if s.get("volume") not in (None,"null",""):
-        try: out.append(("🔄 Volume 24h" if lang=="en" else "🔄 Volumen 24h")+f": ${int(float(s['volume'])):,}")
-        except: pass
-    return "\n".join(out)
-
-# =========================
-# AI (text)
-# =========================
-def detect_lang(text):
-    t=(text or "").lower()
-    if re.search(r"\b(der|die|das|was|wie|warum|kann|preis|kurs|kaufen|chart|tokenomics)\b", t): return "de"
-    return "en"
-
-SYSTEM_BASE = (
-    "You are TBP-AI, the official assistant of TurboPepe-AI (TBP). "
-    "Never give financial advice or promises. No price predictions. "
-    "Do NOT include links unless explicitly asked with keywords (buy, chart, links, website, x, telegram, contract). "
-)
-
-def system_prompt(lang, tone):
-    if lang=="de":
-        style = "Schreibe knapp und sachlich; wenn 'fun': kurz, witzig, aber korrekt."
-        if tone=="fun": style = "Kurz, witzig, aber korrekt."
-        return SYSTEM_BASE + style + "\nAntworte ausschließlich auf Deutsch."
-    style = "Write concise and clear; if 'fun': short, witty, but factual."
-    if tone=="fun": style = "Short, witty, but factual."
-    return SYSTEM_BASE + style + "\nAnswer in English only."
-
-def ai_call(q, lang="en", tone="pro", ctx=None):
-    if not OPENAI_API_KEY: return "API key missing 🐸"
-    messages=[{"role":"system","content":system_prompt(lang,tone)}]
-    if ctx: messages.extend(ctx[-4:])
-    messages.append({"role":"user","content":q})
     try:
-        r = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json={"model":MODEL_NAME,"messages":messages,"max_tokens":350,
-                  "temperature": 0.5 if tone=="pro" else 0.8},
-            timeout=40,
-        )
-        return r.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        return f"Network issue 🐸 ({e})"
+        url = f"https://api.dexscreener.com/latest/dex/pairs/polygon/{TBP_PAIR}"
+        r = requests.get(url, timeout=7); r.raise_for_status()
+        d = r.json()
+        pair = d.get("pair") or (d.get("pairs") or [{}])[0]
+        return {
+            "change_24h": pair.get("priceChange24h"),
+            "volume_24h": (pair.get("volume", {}) or {}).get("h24") or pair.get("volume24h"),
+            "liquidity_usd": (pair.get("liquidity") or {}).get("usd"),
+        }
+    except Exception:
+        return None
 
-# =========================
-# IMAGE GENERATION
-# =========================
-NSFW_RE = re.compile(r"(nude|nsfw|sexual|porno|kill|terror|blood|gore)", re.I)
-def safe_image_prompt(p):
-    if not p or NSFW_RE.search(p): return None
-    return p.strip()
+# ================================================================
+# OpenAI
+# ================================================================
+def build_system():
+    facts = list_facts(20)
+    facts_block = ""
+    if facts:
+        pairs = [f"{k}: {v}" for (k,v) in facts]
+        facts_block = "Known TBP facts (user-taught):\n- " + "\n- ".join(pairs) + "\n\n"
+    return (
+        facts_block +
+        "You are TBP-AI, the meme-savvy assistant of TurboPepe-AI (TBP) on Polygon.\n"
+        "Always answer in the user's language (German or English). Do NOT mix languages.\n"
+        "Tone: witty, friendly, concise. When asked for facts (price/stats/tokenomics/security), be objective and short.\n"
+        "No financial advice. No promises. No NFT pitches. If NFTs are requested, say info is offline.\n"
+        "Prefer bullet points. Keep messages compact for Telegram.\n"
+    )
 
-def openai_image_b64(prompt, size="1024x1024"):
+def call_openai(question, context):
     if not OPENAI_API_KEY: return None
+    headers = {"Content-Type":"application/json", "Authorization": f"Bearer {OPENAI_API_KEY}"}
+    msgs = [{"role":"system","content": build_system()}]
+    for item in context[-6:]:
+        role = "user" if item.startswith("You:") else "assistant"
+        msgs.append({"role": role, "content": item.split(": ",1)[1] if ": " in item else item})
+    msgs.append({"role":"user","content": question})
+    data = {"model": MODEL_NAME, "messages": msgs, "max_tokens": 500, "temperature": 0.4}
     try:
-        r = requests.post(
-            "https://api.openai.com/v1/images/generations",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json={"model": IMG_MODEL, "prompt": prompt, "size": size, "response_format":"b64_json"},
-            timeout=60,
-        )
-        j = r.json()
-        b64 = j["data"][0]["b64_json"]
-        return base64.b64decode(b64)
+        r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data, timeout=40)
+        if not r.ok: return None
+        return r.json()["choices"][0]["message"]["content"]
     except Exception:
         return None
 
-# Telegram file download (for possible future edits/remixes)
-def tg_get_file_bytes(file_id):
-    if not TELEGRAM_TOKEN: return None
-    try:
-        j = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile",
-                         params={"file_id": file_id}, timeout=10).json()
-        path = j["result"]["file_path"]
-        url  = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{path}"
-        return requests.get(url, timeout=30).content
-    except Exception:
-        return None
+# ================================================================
+# Link builder (nur bei Absicht)
+# ================================================================
+def build_links(lang: str, needs):
+    T = {
+        "website": "🌐 Website" if lang=="en" else "🌐 Webseite",
+        "buy":     "💸 Buy on Sushi" if lang=="en" else "💸 Auf Sushi kaufen",
+        "contract":"📜 Polygonscan",
+        "pool":    "📊 Charts",
+        "telegram":"💬 Telegram",
+        "x":       "🐦 X (Twitter)",
+    }
+    out = []
+    if "website" in needs:  out.append(f"[{T['website']}]({LINKS['website']})")
+    if "buy" in needs:      out.append(f"[{T['buy']}]({LINKS['buy']})")
+    if "contract" in needs: out.append(f"[{T['contract']}]({LINKS['contract_scan']})")
+    if "pool" in needs:
+        out += [
+            f"[GeckoTerminal]({LINKS['gecko']})",
+            f"[DEXTools]({LINKS['dextools']})",
+            f"[DexScreener]({LINKS['dexscreener']})",
+        ]
+    if "telegram" in needs: out.append(f"[{T['telegram']}]({LINKS['telegram']})")
+    if "x" in needs:        out.append(f"[{T['x']}]({LINKS['x']})")
+    return "" if not out else ("\n\n— Quick Links —\n" + "\n".join(out))
 
-# =========================
-# INTENT ROUTER
-# =========================
-WHAT_IS_RE = re.compile(r"^(what\s+is\s+tbp|was\s+ist\s+tbp)\b", re.I)
-PRICE_RE   = re.compile(r"\b(preis|price|kurs)\b", re.I)
-BUY_RE     = re.compile(r"\b(buy|kauf|kaufen)\b", re.I)
-CHART_RE   = re.compile(r"\b(chart|charts)\b", re.I)
-LINKS_RE   = re.compile(r"\b(links?)\b", re.I)
-IMG_CMD_RE = re.compile(r"^/(img|image|meme)\b", re.I)
+def linkify(user_q: str, ans: str) -> str:
+    low = (user_q or "").lower()
+    lang = "de" if is_de(low) else "en"
 
-def one_liner(lang="en"):
-    if lang=="de":
-        return ("TBP (TurboPepe-AI) ist ein Meme-Token auf Polygon: LP geburnt, 0 % Tax, "
-                "mit einem Bot, der Live-Daten & Antworten liefert.")
-    return ("TBP (TurboPepe-AI) is a Polygon meme token: burned LP, 0% tax, "
-            "with a bot that posts live stats & answers.")
+    # Preis/Stats nur bei Absicht
+    if WORD_PRICE.search(low):
+        p = get_live_price()
+        st= get_market_stats() or {}
+        lines = []
+        if p is not None: lines.append(("Aktueller Preis" if lang=="de" else "Price") + f": ${p:0.12f}")
+        if st.get("change_24h") not in (None,"","null"): lines.append(("24h Änderung" if lang=="de" else "24h Change") + f": {st['change_24h']}%")
+        if st.get("liquidity_usd") not in (None,"","null"):
+            try: lines.append(("Liquidität" if lang=="de" else "Liquidity") + f": ${int(float(st['liquidity_usd'])):,}")
+            except: pass
+        if st.get("volume_24h") not in (None,"","null"):
+            try: lines.append(("Volumen 24h" if lang=="de" else "Volume 24h") + f": ${int(float(st['volume_24h'])):,}")
+            except: pass
+        if lines: ans = "\n".join(lines) + "\n\n" + ans
 
-def route_intent(q, lang, tone, web=False):
-    low=(q or "").lower()
-    if WHAT_IS_RE.search(low): return one_liner(lang)
-    if PRICE_RE.search(low) or low.startswith("/price"): return format_price_block(lang)
-    if (BUY_RE.search(low) or low.startswith("/buy")) and web:   return "Open SushiSwap:\n"+LINKS["buy"]
-    if (CHART_RE.search(low) or low.startswith("/chart")) and web: return "Charts:\n"+LINKS["dexscreener"]
-    return ai_call(q, lang=lang, tone=tone)
+    needs = []
+    if re.search(r"(what is|was ist|tokenomics|buy|kaufen|chart|preis|price|kurs)", low, re.I):
+        needs += ["website","buy","contract","pool","telegram","x"]
+    if needs:
+        ans += "\n" + build_links(lang, needs)
+    return ans
 
-# =========================
-# WEB ENDPOINTS
-# =========================
-@app.route("/ask", methods=["POST"])
-def ask():
-    j=request.json or {}
-    q=(j.get("question") or "").strip()
-    if not q: return jsonify({"answer":"empty question"}), 200
-    lang=detect_lang(q)
-    ans=route_intent(q, lang, "pro", web=True)
-    return jsonify({"answer":ans})
+# ================================================================
+# AI answer
+# ================================================================
+def ai_answer(user_q: str) -> str:
+    resp = call_openai(user_q, get_state("ctx", []))
+    if not resp:
+        resp = "Network glitch. Try again 🐸" if not is_de(user_q) else "Netzwerk-Glitch. Bitte nochmal! 🐸"
+    resp = sanitize_persona(resp)
+    resp = linkify(user_q, resp)
+    return resp
 
-@app.route("/image", methods=["POST"])
-def image_api():
-    j=request.json or {}
-    prompt=safe_image_prompt(j.get("prompt"))
-    size=j.get("size") or "1024x1024"
-    if not prompt: return jsonify({"error":"prompt blocked or empty"}), 400
-    png=openai_image_b64(prompt, size=size)
-    if not png: return jsonify({"error":"generation failed"}), 500
-    data_url="data:image/png;base64,"+base64.b64encode(png).decode("ascii")
-    return jsonify({"image":data_url,"size":size})
-
-# =========================
-# TELEGRAM SENDERS
-# =========================
-def tg_send(chat_id, text, buttons=None, reply_to=None, markdown=True):
+# ================================================================
+# Telegram utils
+# ================================================================
+def tg_send(chat_id, text, reply_to=None, buttons=None, disable_preview=False):
     if not TELEGRAM_TOKEN: return
-    payload={"chat_id":chat_id,"text":text,
-             "parse_mode":"Markdown" if markdown else "HTML",
-             "disable_web_page_preview":False}
-    if buttons: payload["reply_markup"]={"inline_keyboard":buttons}
-    if reply_to: payload["reply_to_message_id"]=reply_to
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": disable_preview
+    }
+    if reply_to: payload["reply_to_message_id"] = reply_to
+    if buttons:  payload["reply_markup"] = buttons
     try:
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                      json=payload, timeout=12)
-    except Exception: pass
+                      json=payload, timeout=10)
+    except Exception:
+        pass
 
-def tg_send_photo(chat_id, png_bytes, caption=None, reply_to=None):
-    if not TELEGRAM_TOKEN: return
-    try:
-        url=f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
-        files={"photo":("tbp.png", png_bytes, "image/png")}
-        data={"chat_id":chat_id}
-        if caption: data["caption"]=caption
-        if reply_to: data["reply_to_message_id"]=reply_to
-        requests.post(url, data=data, files=files, timeout=30)
-    except Exception: pass
+# Image reaction pool
+IMAGE_RESPONSES = [
+    "🔥 TBP vibes at maximum.",
+    "Bro… wer hat dir erlaubt so ein Meme-Level zu droppen? 😂",
+    "That’s iconic. Want laser eyes? 😎🔫",
+    "Ufff… das gehört ins TBP-Museum. 🖼️🐸",
+    "Legendary drop! Meine KI kichert. 🤖😆",
+    "Damn! Pepe in turbo mode! 🚀🐸",
+    "Krankes Bild — Meme-Power! ⚡",
+    "This slaps. Absolute art. 🎨🐸",
+    "Stabil AF. Weiter so. 😎",
+]
 
-def tg_send_dice(chat_id, emoji="🏀"):
-    if not TELEGRAM_TOKEN: return
-    try:
-        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDice",
-                      data={"chat_id":chat_id,"emoji":emoji}, timeout=10)
-    except Exception: pass
-
-# =========================
-# EXPLAIN TBP BLOCK
-# =========================
-def explain_text(lang="en"):
+# Autopost text
+def autopost_text(lang="en"):
     if lang=="de":
-        return ("🧠 *Was ist TBP (TurboPepe-AI)?*\n"
-                "• Meme-Token auf Polygon (POL)\n"
-                "• LP geburnt, 0 % Tax, transparente Tokenverteilung\n"
-                "• Live-Daten & Antworten direkt vom Bot\n"
-                "• Ziel: Community-Wachstum + Tooling (Auto-Posts, Stats, später X-Bots)\n\n"
-                "🔭 *Wohin geht’s?*\n"
-                "• Listings (Tracker), stabile Liquidität, aktive Community\n"
-                "• Mehr Automationen (Alerts, Preis-Prompts, Mini-Quizzes)\n"
-                "• Kooperationen & Memes — Spaß bleibt Kern, seriös im Handling")
-    return ("🧠 *What is TBP (TurboPepe-AI)?*\n"
-            "• Meme token on Polygon (POL)\n"
-            "• Burned LP, 0% tax, transparent token split\n"
-            "• Live stats & answers via the bot\n"
-            "• Goal: grow community + tooling (auto posts, stats, later X-bots)\n\n"
-            "🔭 *Where is it going?*\n"
-            "• Listings (trackers), steady liquidity, active community\n"
-            "• More automations (alerts, price prompts, mini-quizzes)\n"
-            "• Collabs & memes — fun core, serious handling")
-
-def maybe_send_explain(chat_id, lang):
-    if not should_explain(chat_id): return
-    text=explain_text(lang)
-    buttons=[[{"text":"🍣 Sushi","url":LINKS["buy"]},{"text":"📊 Chart","url":LINKS["dexscreener"]}],
-             [{"text":"📜 Scan","url":LINKS["contract"]},{"text":"🌐 Site","url":LINKS["website"]}]]
-    tg_send(chat_id, text, buttons=buttons)
-    mark_explained(chat_id)
-
-# =========================
-# TELEGRAM WEBHOOK
-# =========================
-@app.route("/telegram", methods=["POST"])
-def telegram():
-    u=request.json or {}
-    m=u.get("message",{}) or {}
-    txt=(m.get("text") or "").strip()
-    chat_id=m.get("chat",{}).get("id")
-    mid=m.get("message_id")
-    photos=m.get("photo") or []
-    caption=(m.get("caption") or "").strip()
-    if not chat_id: return jsonify({"ok":True})
-
-    prefs=get_prefs(chat_id)
-    low=(txt or "").lower()
-
-    # count for periodic explain
-    if txt or caption: inc_explain_counter(chat_id)
-
-    # quick language switches
-    if low in ("english","englisch","/lang en"):
-        prefs["lang"]="en"; tg_send(chat_id,"Okay, English only. 🇬🇧",reply_to=mid); mark_explained(chat_id); return jsonify({"ok":True})
-    if low in ("deutsch","german","/lang de"):
-        prefs["lang"]="de"; tg_send(chat_id,"Alles klar, nur Deutsch. 🇩🇪",reply_to=mid); mark_explained(chat_id); return jsonify({"ok":True})
-
-    # tone
-    if low.startswith("/tone"):
-        if "fun" in low: prefs["tone"]="fun"; tg_send(chat_id,"Humor an. 🐸✨",reply_to=mid)
-        else:            prefs["tone"]="pro"; tg_send(chat_id,"Sachlich aktiv. ✅",reply_to=mid)
-        return jsonify({"ok":True})
-
-    # autopost controls
-    if low.startswith("/autopost"):
-        parts=low.split()
-        if len(parts)>=2 and parts[1]=="on":
-            minutes=int(parts[2]) if len(parts)>=3 and parts[2].isdigit() else 60
-            start_autopost(chat_id, minutes)
-            tg_send(chat_id, f"🔁 Auto-Posting ON, alle {minutes} min.", reply_to=mid)
-        else:
-            stop_autopost(chat_id); tg_send(chat_id,"⏹ Auto-Posting OFF.", reply_to=mid)
-        return jsonify({"ok":True})
-
-    # commands
-    if low.startswith("/start"):
-        tg_send(chat_id,
-            f"Hi, ich bin {BOT_NAME}. Befehle: /price /chart /buy /links /meme <prompt> /img <prompt> /lang de|en /tone pro|fun /autopost on [min]|off",
-            reply_to=mid)
-        mark_explained(chat_id)
-        return jsonify({"ok":True})
-
-    if low.startswith("/links") or LINKS_RE.search(low):
-        tg_send(chat_id, "Quick Links:",
-            buttons=[
-                [{"text":"🌐 Website","url":LINKS["website"]}],
-                [{"text":"🍣 Buy on Sushi","url":LINKS["buy"]}],
-                [{"text":"📜 Polygonscan","url":LINKS["contract"]}],
-                [{"text":"📊 DexScreener","url":LINKS["dexscreener"]}],
-                [{"text":"📈 DEXTools","url":LINKS["dextools"]}],
-                [{"text":"🟢 GeckoTerminal","url":LINKS["gecko"]}],
-                [{"text":"💬 Telegram","url":LINKS["telegram"]}],
-                [{"text":"🐦 X (Twitter)","url":LINKS["x"]}],
-            ],
-            reply_to=mid
+        return (
+            "🐸 **Was ist TBP (TurboPepe-AI)?**\n"
+            "• Meme-Token auf Polygon (POL)\n"
+            "• 0% Tax, transparente Token-Verteilung\n"
+            "• LP burned/locked (on-chain Beweis)\n"
+            "• Live-Stats & Antworten via Bot\n"
+            "• Ziel: aktive Community + AI-Tooling (Auto-Posts, Preis-Prompts, Mini-Quizzes)\n\n"
+            "Charts: " + LINKS["dexscreener"]
         )
-        return jsonify({"ok":True})
+    return (
+        "🐸 **What is TBP (TurboPepe-AI)?**\n"
+        "• Meme token on Polygon (POL)\n"
+        "• 0% tax, transparent token split\n"
+        "• LP burned/locked (on-chain proof)\n"
+        "• Live stats & answers via this bot\n"
+        "• Goal: active community + AI tooling (auto posts, price prompts, mini quizzes)\n\n"
+        "Charts: " + LINKS["dexscreener"]
+    )
 
-    if low.startswith("/buy") or BUY_RE.search(low):
-        tg_send(chat_id, "Buy TBP:", buttons=[[{"text":"SushiSwap (Polygon)","url":LINKS["buy"]}]], reply_to=mid)
-        return jsonify({"ok":True})
+# Message counters for autopost
+def inc_message_count():
+    st = get_state("meta", {"count":0,"last_post": datetime.utcnow().isoformat()+"Z"})
+    st["count"] = st.get("count",0) + 1
+    set_state("meta", st)
+    return st["count"]
 
-    if low.startswith("/chart") or CHART_RE.search(low):
-        tg_send(chat_id, "Charts:",
-            buttons=[
-                [{"text":"DexScreener","url":LINKS["dexscreener"]}],
-                [{"text":"DEXTools","url":LINKS["dextools"]}],
-                [{"text":"GeckoTerminal","url":LINKS["gecko"]}],
-            ],
-            reply_to=mid
-        )
-        return jsonify({"ok":True})
+def should_autopost():
+    st = get_state("meta", {"count":0,"last_post": datetime.utcnow().isoformat()+"Z"})
+    last_iso = st.get("last_post")
+    try:
+        last = datetime.fromisoformat(last_iso.replace("Z",""))
+    except Exception:
+        last = datetime.utcnow() - timedelta(hours=AUTOPOST_EVERY_HOURS+1)
+    due_time = datetime.utcnow() - last >= timedelta(hours=AUTOPOST_EVERY_HOURS)
+    due_msgs = st.get("count",0) >= AUTOPOST_EVERY_MESSAGES
+    return due_time or due_msgs
 
-    if low.startswith("/price") or PRICE_RE.search(low):
-        lang = prefs["lang"] if prefs["lang"]!="auto" else detect_lang(txt)
-        tg_send(chat_id, format_price_block(lang), reply_to=mid)
-        maybe_send_explain(chat_id, lang)
-        return jsonify({"ok":True})
+def mark_autopost_done():
+    set_state("meta", {"count":0, "last_post": datetime.utcnow().isoformat()+"Z"})
 
-    # IMAGE COMMANDS
-    if txt and IMG_CMD_RE.match(txt):
-        lang = prefs["lang"] if prefs["lang"]!="auto" else detect_lang(txt)
-        parts = txt.split(" ",1)
-        prompt = parts[1].strip() if len(parts)>1 else ""
-        prompt = safe_image_prompt(prompt)
-        if not prompt:
-            msg = "❌ Prompt blockiert oder leer." if lang=="de" else "❌ Prompt blocked or empty."
-            tg_send(chat_id, msg, reply_to=mid); return jsonify({"ok":True})
-        # style hint for brand consistency
-        style = " green cyberpunk meme, TurboPepe frog style, crisp, high-contrast, square poster"
-        png = openai_image_b64(prompt + " — " + style, size="1024x1024")
-        if not png:
-            tg_send(chat_id, "⚠️ Bildgenerierung fehlgeschlagen.", reply_to=mid)
-        else:
-            tg_send_photo(chat_id, png, caption="✅ Meme ready.", reply_to=mid)
-        return jsonify({"ok":True})
-
-    # USER PHOTO HANDLING
-    if photos:
-        # largest size
-        fid = sorted(photos, key=lambda p: p.get("file_size",0))[-1].get("file_id")
-        # We don't edit in-place; we generate a fresh meme based on caption or generic.
-        lang = prefs["lang"] if prefs["lang"]!="auto" else detect_lang(caption)
-        if caption and IMG_CMD_RE.match(caption):
-            # treat caption like /meme prompt
-            parts = caption.split(" ",1)
-            prompt = parts[1].strip() if len(parts)>1 else ""
-            prompt = safe_image_prompt(prompt)
-            if prompt:
-                style = " green cyberpunk meme, TurboPepe frog style, crisp, high-contrast, square poster"
-                png=openai_image_b64(prompt + " — " + style, size="1024x1024")
-                if png: tg_send_photo(chat_id, png, caption="✅ Remix ready.", reply_to=mid)
-                else:   tg_send(chat_id, "⚠️ Konnte kein Meme erzeugen.", reply_to=mid)
-            else:
-                tg_send(chat_id, "❌ Prompt blockiert oder leer.", reply_to=mid)
-        else:
-            # playful nudge + buttons
-            txt = ("Schickes Bild! Soll ich daraus ein Meme bauen?" if lang=="de"
-                   else "Nice photo! Want me to spin a meme from it?")
-            buttons = [[
-                {"text":"🎨 /meme pepe rocket","callback_data":"noop"},
-                {"text":"🎨 /meme pepe wins","callback_data":"noop"}
-            ]]
-            tg_send(chat_id, txt+"\n\nTipp: */meme dein prompt* (z.B. `/meme pepe laser eyes`).", buttons=None, reply_to=mid)
-        maybe_send_explain(chat_id, lang)
-        return jsonify({"ok":True})
-
-    # MAIN ANSWER
-    lang = prefs["lang"] if prefs["lang"]!="auto" else detect_lang(txt or caption)
-    ans  = route_intent(txt, lang=lang, tone=prefs["tone"], web=False)
-    tg_send(chat_id, ans, reply_to=mid)
-    maybe_send_explain(chat_id, lang)
-    return jsonify({"ok":True})
-
-# =========================
-# AUTOPOST SCHEDULER
-# =========================
-def compose_autopost(chat_id):
-    prefs=get_prefs(chat_id)
-    lang=prefs["lang"] if prefs["lang"]!="auto" else "en"
-    state=AUTOP.get(chat_id) or {}
-    cycle=state.get("cycle",0)%4
-    text=None; buttons=[
-        [{"text":"🍣 Buy","url":LINKS["buy"]},{"text":"📊 Chart","url":LINKS["dexscreener"]}],
-        [{"text":"📜 Scan","url":LINKS["contract"]},{"text":"🌐 Site","url":LINKS["website"]}],
-    ]
-    if cycle==0:
-        text=("📡 Live Update\n"+format_price_block(lang))
-    elif cycle==1:
-        text=("🐸 "+one_liner(lang)+(" — Let’s hop! 🚀" if lang=="en" else " — Los geht’s! 🚀"))
-    elif cycle==2:
-        text=("Question: What should TBP post next — memes or analytics?" if lang=="en"
-              else "Frage: Was soll TBP als Nächstes posten — Memes oder Analysen?")
-    else:
-        text=("Quick poll: Which DEX do you use more for TBP?\nA) SushiSwap  B) QuickSwap  C) Both" if lang=="en"
-              else "Mini-Umfrage: Welchen DEX nutzt du öfter für TBP?\nA) SushiSwap  B) QuickSwap  C) Beides")
-    return text, buttons
-
-def autopost_loop():
-    while True:
-        try:
-            t=now()
-            for chat_id, cfg in list(AUTOP.items()):
-                if not cfg.get("on"): continue
-                if t >= cfg.get("next",0):
-                    # 35% chance to post an image meme instead of text
-                    if random.random() < 0.35 and OPENAI_API_KEY:
-                        prompt = random.choice([
-                            "TurboPepe frog surfing a green neon wave, cyberpunk city, meme poster",
-                            "TurboPepe AI hacker at terminal, matrix code rain, funny meme poster",
-                            "TurboPepe rocket launch, comic explosion, victory meme poster",
-                        ])
-                        png = openai_image_b64(prompt, size="1024x1024")
-                        if png:
-                            tg_send_photo(chat_id, png, caption="🐸 Meme drop.")
-                        else:
-                            txt, btn = compose_autopost(chat_id)
-                            tg_send(chat_id, txt, buttons=btn)
-                    else:
-                        txt, btn = compose_autopost(chat_id)
-                        tg_send(chat_id, txt, buttons=btn)
-                    if random.random()<0.3: tg_send_dice(chat_id, emoji=random.choice(["🏀","🎯","🎲"]))
-                    cfg["cycle"]=(cfg.get("cycle",0)+1)%4
-                    cfg["next"]=t+cfg.get("interval",3600)
-        except Exception:
-            pass
-        time.sleep(30)
-
-threading.Thread(target=autopost_loop, daemon=True).start()
-
-# =========================
-# MAIN
-# =========================
+# ================================================================
+# Flask endpoints
+# ================================================================
 @app.route("/health")
-def health(): return jsonify({"ok":True})
+def health():
+    return jsonify({"ok": True})
 
+@app.route("/ask", methods=["POST"])
+def ask():
+    data = request.json or {}
+    q = (data.get("question") or "").strip()
+    if not q: return jsonify({"answer":"empty question"}), 200
+    ans = ai_answer(q)
+
+    ctx = get_state("ctx", [])
+    ctx += [f"You: {q}", f"TBP: {ans}"]
+    set_state("ctx", ctx[-10:])
+    return jsonify({"answer": ans})
+
+# ================================================================
+# Telegram webhook
+# ================================================================
+TEACH_RE  = re.compile(r"^/teach\s+(.+?)\s*=\s*(.+)$", re.I)
+FORGET_RE = re.compile(r"^/forget\s+(.+)$", re.I)
+
+@app.route("/telegram", methods=["POST"])
+def telegram_webhook():
+    upd = request.json or {}
+    msg = upd.get("message", {}) or {}
+    chat = msg.get("chat", {}) or {}
+    chat_id = chat.get("id")
+    text   = (msg.get("text") or "").strip()
+    msg_id = msg.get("message_id")
+
+    if not chat_id:
+        return jsonify({"ok": True})
+
+    # Image / Sticker reactions
+    if "photo" in msg or "sticker" in msg:
+        resp = random.choice(IMAGE_RESPONSES)
+        tg_send(chat_id, resp, reply_to=msg_id)
+        inc_message_count()
+        if should_autopost():
+            tg_send(chat_id, autopost_text("de"), buttons=inline_buttons("de"))
+            mark_autopost_done()
+        return jsonify({"ok": True})
+
+    if not text:
+        return jsonify({"ok": True})
+
+    low = text.lower()
+    lang= "de" if is_de(low) else "en"
+
+    # Log
+    log_msg(chat_id, "user", text)
+
+    # /start
+    if low.startswith("/start"):
+        hello = ("Hi, ich bin TBP-AI. Frag mich alles zu TBP (DE/EN). "
+                 "Tipp: /price • /chart • /stats • /links • /mem • /teach key = value • /forget key"
+                 ) if lang=="de" else (
+                 "Hi, I’m TBP-AI. Ask me anything about TBP (EN/DE). "
+                 "Try: /price • /chart • /stats • /links • /mem • /teach key = value • /forget key")
+        tg_send(chat_id, hello, reply_to=msg_id, buttons=inline_buttons(lang))
+        return jsonify({"ok": True})
+
+    # /help
+    if low.startswith("/help"):
+        helptext = ("/price • /chart • /stats • /links • /mem • /teach key = value • /forget key") if lang=="de" \
+            else ("/price • /chart • /stats • /links • /mem • /teach key = value • /forget key")
+        tg_send(chat_id, helptext, reply_to=msg_id, buttons=inline_buttons(lang))
+        return jsonify({"ok": True})
+
+    # /links
+    if low.startswith("/links"):
+        block = build_links(lang, ["website","buy","contract","pool","telegram","x"])
+        tg_send(chat_id, block or ("Links bereit." if lang=="de" else "Links ready."),
+                reply_to=msg_id, buttons=inline_buttons(lang), disable_preview=True)
+        return jsonify({"ok": True})
+
+    # memory ops
+    m = TEACH_RE.match(text)
+    if m:
+        ok = set_fact(m.group(1), m.group(2), source="telegram")
+        tg_send(chat_id, ("✅ Gespeichert: " if ok else "❌ Konnte nicht speichern: ") + f"{m.group(1)} = {m.group(2)}",
+                reply_to=msg_id)
+        return jsonify({"ok": True})
+
+    m = FORGET_RE.match(text)
+    if m:
+        ok = del_fact(m.group(1))
+        tg_send(chat_id, ("🧹 Gelöscht: " if ok else "❌ Nicht gefunden: ") + m.group(1), reply_to=msg_id)
+        return jsonify({"ok": True})
+
+    if low.startswith("/mem"):
+        rows = list_facts()
+        if not rows:
+            tg_send(chat_id, "🗒️ Noch keine Fakten gespeichert. Beispiel: /teach goal = 800M MC in 3y"
+                              if lang=="de" else
+                              "🗒️ No facts stored yet. Example: /teach goal = 800M MC in 3y",
+                    reply_to=msg_id)
+        else:
+            lines = ["🧠 TBP Memory:"]
+            for k,v in rows: lines.append(f"• {k}: {v}")
+            tg_send(chat_id, "\n".join(lines), reply_to=msg_id)
+        return jsonify({"ok": True})
+
+    # price / stats intent or /price
+    if low.startswith("/price") or WORD_PRICE.search(low):
+        p  = get_live_price()
+        st = get_market_stats() or {}
+        lines = []
+        if p is not None: lines.append(("💰 Preis" if lang=="de" else "💰 Price") + f": ${p:0.12f}")
+        if st.get("liquidity_usd") not in (None,"","null"):
+            try: lines.append(("💧 Liquidität" if lang=="de" else "💧 Liquidity") + f": ${int(float(st['liquidity_usd'])):,}")
+            except: pass
+        if st.get("volume_24h") not in (None,"","null"):
+            try: lines.append(("🔄 Volumen 24h" if lang=="de" else "🔄 Volume 24h") + f": ${int(float(st['volume_24h'])):,}")
+            except: pass
+        if st.get("change_24h") not in (None,"","null"):
+            lines.append(("📈 24h Änderung" if lang=="de" else "📈 24h Change") + f": {st['change_24h']}%")
+        if not lines:
+            lines = [ "Preis derzeit nicht verfügbar." if lang=="de" else "Price currently unavailable." ]
+        tg_send(chat_id, "\n".join(lines), reply_to=msg_id, buttons=inline_buttons(lang))
+        inc_message_count()
+        if should_autopost():
+            tg_send(chat_id, autopost_text(lang), buttons=inline_buttons(lang))
+            mark_autopost_done()
+        return jsonify({"ok": True})
+
+    # /chart
+    if low.startswith("/chart"):
+        tg_send(chat_id,
+                ("📊 Live Chart: " if lang=="de" else "📊 Live chart: ") + LINKS["dexscreener"] +
+                ("\nAlt: " if lang=="de" else "\nAlt: ") + LINKS["dextools"],
+                reply_to=msg_id, buttons=inline_buttons(lang))
+        return jsonify({"ok": True})
+
+    # /stats
+    if low.startswith("/stats"):
+        st = get_market_stats() or {}
+        lines = ["TBP Stats:"]
+        if st.get("change_24h") not in (None,"","null"):  lines.append(f"• 24h: {st['change_24h']}%")
+        if st.get("volume_24h") not in (None,"","null"):
+            try: lines.append(f"• Vol 24h: ${int(float(st['volume_24h'])):,}")
+            except: pass
+        if st.get("liquidity_usd") not in (None,"","null"):
+            try: lines.append(f"• Liq: ${int(float(st['liquidity_usd'])):,}")
+            except: pass
+        tg_send(chat_id, "\n".join(lines), reply_to=msg_id, buttons=inline_buttons(lang))
+        return jsonify({"ok": True})
+
+    # Normal AI flow (ohne Link-Spam)
+    ans = ai_answer(text)
+    tg_send(chat_id, ans, reply_to=msg_id)
+
+    # Update context + autopost
+    ctx = get_state("ctx", [])
+    ctx += [f"You: {text}", f"TBP: {ans}"]
+    set_state("ctx", ctx[-10:])
+    inc_message_count()
+    if should_autopost():
+        tg_send(chat_id, autopost_text(lang), buttons=inline_buttons(lang))
+        mark_autopost_done()
+
+    return jsonify({"ok": True})
+
+# ================================================================
+# Main
+# ================================================================
 if __name__ == "__main__":
-    port=int(os.environ.get("PORT",10000))
-    print(f"[{BOT_NAME}] running on :{port}")
+    init_db()
+    port = int(os.environ.get("PORT", 10000))
+    print(f"[{BOT_NAME}] starting on :{port}")
     app.run(host="0.0.0.0", port=port)
