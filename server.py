@@ -6,6 +6,19 @@ import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import threading
+# Live-Preis von GeckoTerminal abrufen
+def get_live_price():
+    try:
+        url = "https://api.geckoterminal.com/api/v2/networks/polygon_pos/pools/0x945c73101e11cc9e529c839d1d75648d04047b0b"
+        r = requests.get(url, timeout=5)
+        data = r.json()
+
+        # Preis als USD Wert
+        price = data["data"]["attributes"]["base_token_price_usd"]
+        return float(price)
+    except Exception as e:
+        print("[ERROR] GeckoTerminal:", e)
+        return None
 
 # ================================================================
 # == CONFIG / LINKS / CONSTANTS ==
@@ -122,8 +135,19 @@ def build_links(lang, needs):
     return "\n\n— Quick Links —\n" + "\n".join(out)
 
 def linkify(q, ans):
+    # --- Live-Preis: früh raus, wenn nach Preis/Chart/Kurs gefragt wird ---
+    if any(w in q.lower() for w in ["preis", "price", "chart", "kurs"]):
+        p = get_live_price()
+        if p is not None:
+            return f"💹 Aktueller TBP-Preis: ${p:.10f} pro Token\n(Quelle: GeckoTerminal)\n"
+        # Fallback: wenn GeckoTerminal down ist -> normale Antwort plus Links
+        # Dann NICHT returnen, sondern weiter unten die Link-Liste anhängen
+    # ----------------------------------------------------------------------
+
     lang = "de" if is_de(q) else "en"
     need = []
+
+
 
     # detect
     for key in KW:
