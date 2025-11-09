@@ -8,7 +8,6 @@ import time
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import threading
 
 # ================================================================
 # == CONFIG / LINKS / CONSTANTS ==
@@ -33,13 +32,13 @@ LINKS = {
     "contract_scan":f"https://polygonscan.com/token/{TBP_CONTRACT}",
 }
 
-# Supply (für einfache MC-Schätzung auf der Seite, AI nennt Zahlen vorsichtig)
+# Supply (für einfache MC-Schätzung – AI erwähnt vorsichtig)
 MAX_SUPPLY  = 190_000_000_000
 BURNED      = 10_000_000_000
 OWNER       = 14_000_000_000
 CIRC_SUPPLY = MAX_SUPPLY - BURNED - OWNER
 
-# kleine In-Memory-Kontexte (Web + TG)
+# Gesprächskontext
 MEM = {"ctx": []}
 
 app = Flask(__name__)
@@ -50,11 +49,7 @@ CORS(app)
 # ================================================================
 
 def get_live_price():
-    """
-    Primär: GeckoTerminal API
-    Fallback: Dexscreener
-    Rückgabe: float (USD) oder None
-    """
+    """Primär GeckoTerminal, Fallback Dexscreener. Rückgabe float|None (USD)."""
     # 1) GeckoTerminal
     try:
         url = f"https://api.geckoterminal.com/api/v2/networks/polygon_pos/pools/{TBP_PAIR}"
@@ -62,46 +57,41 @@ def get_live_price():
         r.raise_for_status()
         j = r.json()
         attrs = j.get("data", {}).get("attributes", {})
-        price = float(attrs.get("base_token_price_usd")) if attrs.get("base_token_price_usd") is not None else None
+        v = attrs.get("base_token_price_usd")
+        price = float(v) if v not in (None, "null", "") else None
         if price and price > 0:
             return price
     except Exception:
         pass
-
-    # 2) Dexscreener fallback
+    # 2) Dexscreener
     try:
         url = f"https://api.dexscreener.com/latest/dex/pairs/polygon/{TBP_PAIR}"
         r = requests.get(url, timeout=5)
         r.raise_for_status()
         j = r.json()
         pair = j.get("pair") or (j.get("pairs") or [{}])[0]
-        price = float(pair.get("priceUsd")) if pair.get("priceUsd") is not None else None
+        v = pair.get("priceUsd")
+        price = float(v) if v not in (None, "null", "") else None
         if price and price > 0:
             return price
     except Exception:
         pass
-
     return None
 
 
 def get_market_stats():
-    """
-    Dexscreener für: 24h Change, 24h Volumen, Liquidity (USD)
-    Rückgabe: dict oder None
-    """
+    """Dexscreener: 24h Change, 24h Vol, Liquidity USD. Rückgabe dict|None."""
     try:
         url = f"https://api.dexscreener.com/latest/dex/pairs/polygon/{TBP_PAIR}"
         r = requests.get(url, timeout=5)
         r.raise_for_status()
         data = r.json()
         pair = data.get("pair") or (data.get("pairs") or [{}])[0]
-
-        stats = {
+        return {
             "change_24h": pair.get("priceChange24h"),
-            "volume_24h": pair.get("volume24h"),
+            "volume_24h": (pair.get("volume", {}) or {}).get("h24") or pair.get("volume24h"),
             "liquidity_usd": (pair.get("liquidity") or {}).get("usd"),
         }
-        return stats
     except Exception:
         return None
 
@@ -110,14 +100,16 @@ def get_market_stats():
 # == UTILITIES ==
 # ================================================================
 
-def is_de(text):
-    return bool(re.search(r"\b(der|die|das|ich|du|wie|was|warum|kann|preis|kurs|tokenomics|listung)\b", (text or "").lower()))
+WORD_RE = re.compile(r"\b(preis|price|kurs|chart|charts)\b", re.I)
 
-def sanitize_persona(ans):
-    """Entfernt NFT-Erwähnungen (TBP Gold) und heikle Aussagen."""
+def is_de(text: str) -> bool:
+    text = (text or "").lower()
+    return bool(re.search(r"\b(der|die|das|ich|du|wie|was|warum|kann|tokenomics|listung)\b", text))
+
+def sanitize_persona(ans: str) -> str:
     if not ans:
         return ""
-    # keine NFT-Promises mehr
+    # NFT-Erwähnungen kappen
     if re.search(r"\bNFT\b", ans, re.I):
         ans = re.sub(r"\bNFTs?.*", "", ans, flags=re.I).strip()
     # Keine Finanzberatung
@@ -132,10 +124,10 @@ def build_system():
         "No financial advice. No promises.\n"
         "If asked for purpose/vision, emphasize AI-driven autonomy, transparency, and community growth.\n"
         "If asked for NFTs, say TBP Gold/NFT info is currently offline/unavailable.\n"
-        "When users ask about price/stats, use the provided telemetry blocks from the tool answer.\n"
+        "Do NOT invent live data. Only mention price/stats when provided by the tool layer.\n"
     )
 
-def build_links(lang, needs):
+def build_links(lang: str, needs):
     L = {
         "website":  "Website" if lang=="en" else "Webseite",
         "telegram": "Telegram" if lang=="en" else "Telegram-Gruppe",
@@ -148,64 +140,63 @@ def build_links(lang, needs):
         "dexscreener": "DexScreener",
         "scan":     "Polygonscan",
     }
-
     out = []
-    if "website" in needs:  out.append(f"• {L['website']}: {LINKS['website']}")
-    if "buy" in needs:      out.append(f"• {L['buy']}: {LINKS['buy']}")
+    if "website"  in needs: out.append(f"• {L['website']}: {LINKS['website']}")
+    if "buy"      in needs: out.append(f"• {L['buy']}: {LINKS['buy']}")
     if "contract" in needs: out.append(f"• {L['scan']}: {LINKS['contract_scan']}")
-    if "pool" in needs:
+    if "pool"     in needs:
         out += [
             f"• {L['gecko']}: {LINKS['gecko']}",
             f"• {L['dextools']}: {LINKS['dextools']}",
             f"• {L['dexscreener']}: {LINKS['dexscreener']}",
         ]
     if "telegram" in needs: out.append(f"• {L['telegram']}: {LINKS['telegram']}")
-    if "x" in needs:        out.append(f"• X: {LINKS['x']}")
+    if "x"        in needs: out.append(f"• X: {LINKS['x']}")
+    return "" if not out else ("\n\n— Quick Links —\n" + "\n".join(out))
 
-    if not out:
-        return ""
-    return "\n\n— Quick Links —\n" + "\n".join(out)
-
-def linkify(user_q, ans):
+def linkify(user_q: str, ans: str) -> str:
+    """
+    Hängt nur dann Live-Preis/Stats an, wenn echte Preis-Absicht (Wortgrenzen!).
+    Verhindert doppelte Preisblöcke.
+    """
     low = (user_q or "").lower()
     lang = "de" if is_de(user_q) else "en"
 
-    # --- ROBUSTER PRICE/TRIGGER ---
-    price_re = re.compile(
-        r"\b("
-        r"price|preis|kurs|chart|charts|"
-        r"how\s+much|wieviel|wie\s+viel|"
-        r"aktueller?\s*preis|current\s*price|"
-        r"tbp\s*price|\$?\s*tbp"
-        r")\b",
-        re.I
-    )
-
-    if price_re.search(low):
+    # Nur bei klarer Preisabsicht
+    if WORD_RE.search(low):
         p = get_live_price()
         stats = get_market_stats()
         lines = []
-        if p:
+        if p is not None:
             lines.append(("Aktueller TBP-Preis" if lang=="de" else "Current TBP price") + f": ${p:0.12f}")
         if stats:
-            if stats.get("change_24h") is not None:
+            if stats.get("change_24h") not in (None, "null", ""):
                 lines.append(("24h Veränderung" if lang=="de" else "24h Change") + f": {stats['change_24h']}%")
-            if stats.get("liquidity_usd") is not None:
-                lines.append(("Liquidität" if lang=="de" else "Liquidity") + f": ${int(float(stats['liquidity_usd'])):,}")
-            if stats.get("volume_24h") is not None:
-                lines.append(("Volumen 24h" if lang=="de" else "Volume 24h") + f": ${int(float(stats['volume_24h'])):,}")
+            if stats.get("liquidity_usd") not in (None, "null", ""):
+                try:
+                    liq = int(float(stats["liquidity_usd"]))
+                    lines.append(("Liquidität" if lang=="de" else "Liquidity") + f": ${liq:,}")
+                except Exception:
+                    pass
+            if stats.get("volume_24h") not in (None, "null", ""):
+                try:
+                    vol = int(float(stats["volume_24h"]))
+                    lines.append(("Volumen 24h" if lang=="de" else "Volume 24h") + f": ${vol:,}")
+                except Exception:
+                    pass
         if lines:
-            ans = "\n".join(lines) + "\n\n" + ans
+            # Doppel-Ausgabe verhindern, falls AI selbst schon Zahlen erwähnt hat
+            if "TBP-Preis" not in ans and "Current TBP price" not in ans:
+                ans = "\n".join(lines) + "\n\n" + ans
 
-    # Generische Quick-Links
+    # Nur Links anhängen, keine erneute Preiswiederholung
     need = []
-    if re.search(r"(what is|was ist|tokenomics|buy|kaufen|chart|preis|kurs)", low, re.I):
-        need += ["website","buy","contract","pool","telegram","x"]
+    if re.search(r"(what is|was ist|tokenomics|buy|kaufen|chart|preis|price|kurs)", low, re.I):
+        need += ["website", "buy", "contract", "pool", "telegram", "x"]
     need = list(dict.fromkeys(need))
     if need:
         ans += "\n" + build_links(lang, need)
     return ans
-
 
 
 # ================================================================
@@ -215,48 +206,34 @@ def linkify(user_q, ans):
 def call_openai(question, context):
     if not OPENAI_API_KEY:
         return None
-
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {OPENAI_API_KEY}",
     }
-
-    messages = [
-        {"role": "system", "content": build_system()}
-    ]
-    # letzten Kontext anhängen (kurz)
+    messages = [{"role": "system", "content": build_system()}]
     for item in context[-6:]:
         role = "user" if item.startswith("You:") else "assistant"
-        messages.append({"role": role, "content": item.split(": ",1)[1] if ": " in item else item})
-
-    # Nutzerfrage
+        messages.append({"role": role, "content": item.split(": ", 1)[1] if ": " in item else item})
     messages.append({"role": "user", "content": question})
-
     data = {
         "model": MODEL_NAME,
         "messages": messages,
         "max_tokens": 500,
         "temperature": 0.4
     }
-
     try:
-        r = requests.post("https://api.openai.com/v1/chat/completions",
-                          headers=headers, json=data, timeout=40)
+        r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data, timeout=40)
         if not r.ok:
             return None
-        out = r.json()["choices"][0]["message"]["content"]
+        return r.json()["choices"][0]["message"]["content"]
     except Exception:
-        out = None
-
-    return out
+        return None
 
 
-def ai_answer(user_q):
-    """Hauptlogik: OpenAI → Säubern → Links & Live-Daten anhängen"""
+def ai_answer(user_q: str) -> str:
     resp = call_openai(user_q, MEM["ctx"])
     if not resp:
         resp = "Network glitch. try again 🐸"
-
     resp = sanitize_persona(resp)
     resp = linkify(user_q, resp)
     return resp
@@ -275,7 +252,6 @@ def ask():
 
     ans = ai_answer(q)
 
-    # context speichern
     MEM["ctx"].append(f"You: {q}")
     MEM["ctx"].append(f"TBP: {ans}")
     MEM["ctx"] = MEM["ctx"][-10:]
@@ -292,15 +268,10 @@ def tg_send(chat_id, text, reply_to=None):
     if not token:
         return
     try:
-        payload = {
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "HTML"
-        }
+        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
         if reply_to:
             payload["reply_to_message_id"] = reply_to
-        requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                      json=payload, timeout=10)
+        requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=10)
     except Exception:
         pass
 
@@ -325,9 +296,7 @@ def telegram_webhook():
         return jsonify({"ok": True})
 
     if low.startswith("/help"):
-        tg_send(chat_id,
-                "/price • /chart • /links • /stats — oder frag ganz normal (DE/EN).",
-                reply_to=msg_id)
+        tg_send(chat_id, "/price • /chart • /links • /stats — oder frag ganz normal (DE/EN).", reply_to=msg_id)
         return jsonify({"ok": True})
 
     if low.startswith("/links"):
@@ -336,16 +305,20 @@ def telegram_webhook():
         tg_send(chat_id, block or "Links ready.", reply_to=msg_id)
         return jsonify({"ok": True})
 
-    if low.startswith("/price") or "preis" in low or "price" in low or "kurs" in low:
+    # Preis/Stats nur bei klarer Absicht oder /price
+    if low.startswith("/price") or WORD_RE.search(low):
         p = get_live_price()
         stats = get_market_stats() or {}
         lines = []
-        if p:     lines.append(f"💰 Price: ${p:0.12f}")
-        if stats.get("change_24h") is not None:  lines.append(f"📈 24h: {stats['change_24h']}%")
-        if stats.get("liquidity_usd") is not None: lines.append(f"💧 Liquidity: ${int(float(stats['liquidity_usd'])):,}")
-        if stats.get("volume_24h") is not None:    lines.append(f"🔄 Volume 24h: ${int(float(stats['volume_24h'])):,}")
-        if not lines:
-            lines.append("Price currently unavailable.")
+        if p is not None: lines.append(f"💰 Price: ${p:0.12f}")
+        if stats.get("change_24h") not in (None, "null", ""):  lines.append(f"📈 24h: {stats['change_24h']}%")
+        if stats.get("liquidity_usd") not in (None, "null", ""):
+            try: lines.append(f"💧 Liquidity: ${int(float(stats['liquidity_usd'])):,}")
+            except: pass
+        if stats.get("volume_24h") not in (None, "null", ""):
+            try: lines.append(f"🔄 Volume 24h: ${int(float(stats['volume_24h'])):,}")
+            except: pass
+        if not lines: lines.append("Price currently unavailable.")
         lines.append(f"Charts: {LINKS['dexscreener']}")
         tg_send(chat_id, "\n".join(lines), reply_to=msg_id)
         return jsonify({"ok": True})
@@ -357,9 +330,13 @@ def telegram_webhook():
     if low.startswith("/stats"):
         stats = get_market_stats() or {}
         lines = ["TBP Stats (Dexscreener):"]
-        if stats.get("change_24h") is not None:  lines.append(f"• 24h Change: {stats['change_24h']}%")
-        if stats.get("volume_24h") is not None:  lines.append(f"• Volume 24h: ${int(float(stats['volume_24h'])):,}")
-        if stats.get("liquidity_usd") is not None: lines.append(f"• Liquidity: ${int(float(stats['liquidity_usd'])):,}")
+        if stats.get("change_24h") not in (None, "null", ""):  lines.append(f"• 24h Change: {stats['change_24h']}%")
+        if stats.get("volume_24h") not in (None, "null", ""):
+            try: lines.append(f"• Volume 24h: ${int(float(stats['volume_24h'])):,}")
+            except: pass
+        if stats.get("liquidity_usd") not in (None, "null", ""):
+            try: lines.append(f"• Liquidity: ${int(float(stats['liquidity_usd'])):,}")
+            except: pass
         tg_send(chat_id, "\n".join(lines), reply_to=msg_id)
         return jsonify({"ok": True})
 
@@ -367,7 +344,6 @@ def telegram_webhook():
     ans = ai_answer(text)
     tg_send(chat_id, ans, reply_to=msg_id)
 
-    # Kontext
     MEM["ctx"].append(f"You: {text}")
     MEM["ctx"].append(f"TBP: {ans}")
     MEM["ctx"] = MEM["ctx"][-10:]
