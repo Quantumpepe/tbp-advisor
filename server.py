@@ -1,7 +1,7 @@
-# server.py — TBP-AI v5.0 (objective-by-default, lang/tone prefs, clean links)
+# server.py — TBP-AI v5.1 (adds image generation for TG + Web)
 # -*- coding: utf-8 -*-
 
-import os, re, requests
+import os, re, base64, requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -10,6 +10,7 @@ from flask_cors import CORS
 # =========================
 BOT_NAME       = "TBP-AI"
 MODEL_NAME     = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+IMG_MODEL      = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1")  # OpenAI Image model
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 
@@ -34,22 +35,17 @@ CORS(app)
 # =========================
 # PREFERENCES (per chat)
 # =========================
-# Default: objective (pro), language auto
 PREFS = {}  # chat_id -> {"lang": "auto|de|en", "tone":"pro|fun"}
 
 def get_prefs(chat_id):
     d = PREFS.get(chat_id) or {"lang": "auto", "tone": "pro"}
     PREFS[chat_id] = d
     return d
-
-def set_lang(chat_id, lang):
-    p = get_prefs(chat_id); p["lang"] = lang
-
-def set_tone(chat_id, tone):
-    p = get_prefs(chat_id); p["tone"] = tone
+def set_lang(chat_id, lang): get_prefs(chat_id)["lang"] = lang
+def set_tone(chat_id, tone): get_prefs(chat_id)["tone"] = tone
 
 # =========================
-# LIVE DATA
+# LIVE DATA (price/stats)
 # =========================
 def _dexs_pair_obj():
     try:
@@ -58,17 +54,15 @@ def _dexs_pair_obj():
             timeout=7,
         )
         j = r.json() if r.ok else {}
-        if isinstance(j.get("pair"), dict):
-            return j["pair"]
+        if isinstance(j.get("pair"), dict): return j["pair"]
         pairs = j.get("pairs")
-        if isinstance(pairs, list) and pairs:
-            return pairs[0]
+        if isinstance(pairs, list) and pairs: return pairs[0]
     except Exception:
         pass
     return {}
 
 def get_live_price():
-    # 1) GeckoTerminal
+    # GeckoTerminal first
     try:
         r = requests.get(
             f"https://api.geckoterminal.com/api/v2/networks/polygon_pos/pools/{TBP_PAIR}",
@@ -79,18 +73,16 @@ def get_live_price():
             p = attrs.get("base_token_price_usd")
             if p is not None:
                 p = float(p)
-                if p > 0:
-                    return p
+                if p > 0: return p
     except Exception:
         pass
-    # 2) Dexscreener fallback
+    # Dexscreener fallback
     try:
         po = _dexs_pair_obj()
         p = po.get("priceUsd")
         if p is not None:
             p = float(p)
-            if p > 0:
-                return p
+            if p > 0: return p
     except Exception:
         pass
     return None
@@ -122,7 +114,7 @@ def format_price_block():
     return "\n".join(out)
 
 # =========================
-# AI
+# AI (chat text)
 # =========================
 def detect_lang(text):
     t = (text or "").lower()
@@ -139,44 +131,24 @@ SYSTEM_BASE = (
 def system_prompt(lang, tone):
     if lang == "de":
         style = "Schreibe klar, kurz, sachlich."
-        if tone == "fun":
-            style = "Schreibe kurz, witzig, aber sachlich korrekt."
-        return (
-            SYSTEM_BASE +
-            style + "\nAntworte ausschließlich auf Deutsch.\n"
-            "Wenn die Frage allgemein 'was ist TBP' lautet, gib eine kurze, objektive Ein-Satz-Erklärung."
-        )
-    # en
+        if tone == "fun": style = "Schreibe kurz, witzig, aber sachlich korrekt."
+        return SYSTEM_BASE + style + "\nAntworte ausschließlich auf Deutsch."
     style = "Write clearly, concisely, objectively."
-    if tone == "fun":
-        style = "Write short, witty, but factual."
-    return (
-        SYSTEM_BASE +
-        style + "\nAnswer in English only.\n"
-        "If the question is 'what is tbp', provide a short, objective one-sentence description."
-    )
+    if tone == "fun": style = "Write short, witty, but factual."
+    return SYSTEM_BASE + style + "\nAnswer in English only."
 
 def ai_call(q, lang="en", tone="pro", ctx=None):
     if not OPENAI_API_KEY:
-        # minimal fallback
         return "API key missing 🐸"
-    messages = [
-        {"role": "system", "content": system_prompt(lang, tone)},
-    ]
-    if ctx:
-        messages.extend(ctx[-4:])
-    messages.append({"role": "user", "content": q})
-    data = {
-        "model": MODEL_NAME,
-        "messages": messages,
-        "max_tokens": 350,
-        "temperature": 0.5 if tone=="pro" else 0.8,
-    }
+    messages = [{"role":"system","content":system_prompt(lang,tone)}]
+    if ctx: messages.extend(ctx[-4:])
+    messages.append({"role":"user","content":q})
     try:
         r = requests.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json=data,
+            json={"model": MODEL_NAME, "messages": messages, "max_tokens": 350,
+                  "temperature": 0.5 if tone=="pro" else 0.8},
             timeout=40,
         )
         return r.json()["choices"][0]["message"]["content"].strip()
@@ -184,76 +156,107 @@ def ai_call(q, lang="en", tone="pro", ctx=None):
         return f"Network issue 🐸 ({e})"
 
 # =========================
-# WEB ENDPOINT
+# IMAGE GENERATION
 # =========================
-@app.route("/ask", methods=["POST"])
-def ask():
-    j = request.json or {}
-    q = (j.get("question") or "").strip()
-    if not q:
-        return jsonify({"answer": "empty question"}), 200
-    # simple auto language; tone default pro
-    lang = detect_lang(q)
-    ans = route_intent(q, lang, "pro", web=True, chat_id=None, mid=None)
-    return jsonify({"answer": ans})
+NSFW_RE = re.compile(r"(nude|nsfw|sexual|porno|kill|terror|blood|gore)", re.I)
+
+def safe_image_prompt(p):
+    if not p or NSFW_RE.search(p):
+        return None
+    return p.strip()
+
+def openai_image_b64(prompt, size="1024x1024"):
+    """Returns (bytes_png) or None."""
+    if not OPENAI_API_KEY: return None
+    try:
+        r = requests.post(
+            "https://api.openai.com/v1/images/generations",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={"model": IMG_MODEL, "prompt": prompt, "size": size, "response_format":"b64_json"},
+            timeout=60,
+        )
+        j = r.json()
+        b64 = j["data"][0]["b64_json"]
+        return base64.b64decode(b64)
+    except Exception:
+        return None
 
 # =========================
-# INTENT ROUTER (shared web + TG)
+# INTENT ROUTER
 # =========================
 WHAT_IS_RE = re.compile(r"^(what\s+is\s+tbp|was\s+ist\s+tbp)\b", re.I)
 PRICE_RE   = re.compile(r"\b(preis|price|kurs)\b", re.I)
 BUY_RE     = re.compile(r"\b(buy|kauf|kaufen)\b", re.I)
 CHART_RE   = re.compile(r"\b(chart|charts)\b", re.I)
 LINKS_RE   = re.compile(r"\b(links?)\b", re.I)
+IMG_RE     = re.compile(r"^/(img|image)\b", re.I)
 
 def one_liner(lang="en"):
     if lang == "de":
-        return ("TBP (TurboPepe-AI) ist ein Meme-Token auf Polygon mit verifizierter "
-                "Transparenz (LP geburnt, 0 % Tax) und einem Bot, der Live-Daten liefert.")
-    return ("TBP (TurboPepe-AI) is a Polygon meme token with transparent setup "
+        return ("TBP (TurboPepe-AI) ist ein Meme-Token auf Polygon mit "
+                "transparenter Struktur (LP geburnt, 0 % Tax) und einem Bot, der Live-Daten liefert.")
+    return ("TBP (TurboPepe-AI) is a Polygon meme token with a transparent setup "
             "(burned LP, 0% tax) and an assistant that reports live on-chain data.")
 
-def route_intent(q, lang, tone, web=False, chat_id=None, mid=None):
+def route_intent(q, lang, tone, web=False):
     low = (q or "").lower()
-
-    # force short, neutral description
-    if WHAT_IS_RE.search(low):
-        return one_liner(lang)
-
-    # price
-    if PRICE_RE.search(low) or low.startswith("/price"):
-        return format_price_block()
-
-    # on web we just return text; on TG we send buttons via tg_send from the caller
-    if (BUY_RE.search(low) or low.startswith("/buy")) and web:
-        return "Open SushiSwap:\n" + LINKS["buy"]
-    if (CHART_RE.search(low) or low.startswith("/chart")) and web:
-        return "Charts:\n" + LINKS["dexscreener"]
-
-    # default -> AI (objective by default)
+    if WHAT_IS_RE.search(low): return one_liner(lang)
+    if PRICE_RE.search(low) or low.startswith("/price"): return format_price_block()
+    if (BUY_RE.search(low) or low.startswith("/buy")) and web:   return "Open SushiSwap:\n" + LINKS["buy"]
+    if (CHART_RE.search(low) or low.startswith("/chart")) and web: return "Charts:\n" + LINKS["dexscreener"]
     return ai_call(q, lang=lang, tone=tone)
+
+# =========================
+# WEB ENDPOINTS
+# =========================
+@app.route("/ask", methods=["POST"])
+def ask():
+    j = request.json or {}
+    q = (j.get("question") or "").strip()
+    if not q: return jsonify({"answer":"empty question"}), 200
+    lang = detect_lang(q)
+    ans = route_intent(q, lang, "pro", web=True)
+    return jsonify({"answer": ans})
+
+@app.route("/image", methods=["POST"])
+def image_api():
+    j = request.json or {}
+    prompt = safe_image_prompt(j.get("prompt"))
+    size   = j.get("size") or "1024x1024"
+    if not prompt: return jsonify({"error":"prompt blocked or empty"}), 400
+    png = openai_image_b64(prompt, size=size)
+    if not png: return jsonify({"error":"generation failed"}), 500
+    data_url = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+    return jsonify({"image": data_url, "size": size})
 
 # =========================
 # TELEGRAM
 # =========================
 def tg_send(chat_id, text, buttons=None, reply_to=None):
-    if not TELEGRAM_TOKEN:
-        return
+    if not TELEGRAM_TOKEN: return
     payload = {
         "chat_id": chat_id,
         "text": text,
         "parse_mode": "Markdown",
         "disable_web_page_preview": False,
     }
-    if buttons:
-        payload["reply_markup"] = {"inline_keyboard": buttons}
-    if reply_to:
-        payload["reply_to_message_id"] = reply_to
+    if buttons:  payload["reply_markup"] = {"inline_keyboard": buttons}
+    if reply_to: payload["reply_to_message_id"] = reply_to
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json=payload, timeout=12
-        )
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                      json=payload, timeout=12)
+    except Exception:
+        pass
+
+def tg_send_photo(chat_id, png_bytes, caption=None, reply_to=None):
+    if not TELEGRAM_TOKEN: return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+        files = {"photo": ("tbp.png", png_bytes, "image/png")}
+        data = {"chat_id": chat_id}
+        if caption: data["caption"] = caption
+        if reply_to: data["reply_to_message_id"] = reply_to
+        requests.post(url, data=data, files=files, timeout=30)
     except Exception:
         pass
 
@@ -264,38 +267,28 @@ def telegram():
     txt = (m.get("text") or "").strip()
     chat_id = m.get("chat", {}).get("id")
     mid = m.get("message_id")
-
-    if not chat_id or not txt:
-        return jsonify({"ok": True})
+    if not chat_id or not txt: return jsonify({"ok": True})
 
     prefs = get_prefs(chat_id)
-
     low = txt.lower()
 
-    # quick language switches
-    if low in ("english", "englisch", "/lang en"):
-        set_lang(chat_id, "en"); tg_send(chat_id, "Okay, English only. 🇬🇧", reply_to=mid); return jsonify({"ok": True})
-    if low in ("deutsch", "german", "/lang de"):
-        set_lang(chat_id, "de"); tg_send(chat_id, "Alles klar, nur Deutsch. 🇩🇪", reply_to=mid); return jsonify({"ok": True})
+    # language quick switches
+    if low in ("english","englisch","/lang en"): set_lang(chat_id,"en"); tg_send(chat_id,"Okay, English only. 🇬🇧",reply_to=mid); return jsonify({"ok":True})
+    if low in ("deutsch","german","/lang de"):  set_lang(chat_id,"de"); tg_send(chat_id,"Alles klar, nur Deutsch. 🇩🇪",reply_to=mid);  return jsonify({"ok":True})
 
     # tone
     if low.startswith("/tone"):
-        if "fun" in low: set_tone(chat_id, "fun");  tg_send(chat_id, "Humor an. 🐸✨", reply_to=mid)
-        else:            set_tone(chat_id, "pro");  tg_send(chat_id, "Sachlich aktiv. ✅", reply_to=mid)
-        return jsonify({"ok": True})
+        if "fun" in low: set_tone(chat_id,"fun"); tg_send(chat_id,"Humor an. 🐸✨",reply_to=mid)
+        else:            set_tone(chat_id,"pro"); tg_send(chat_id,"Sachlich aktiv. ✅",reply_to=mid)
+        return jsonify({"ok":True})
 
-    # commands
+    # basic commands
     if low.startswith("/start"):
-        tg_send(chat_id,
-            f"Hi, ich bin {BOT_NAME}. Standard: sachlich & kurz. "
-            "Befehle: /price /chart /buy /links /lang de|en /tone pro|fun",
-            reply_to=mid
-        )
-        return jsonify({"ok": True})
+        tg_send(chat_id, f"Hi, ich bin {BOT_NAME}. Befehle: /price /chart /buy /links /img <prompt> /lang de|en /tone pro|fun", reply_to=mid)
+        return jsonify({"ok":True})
 
-    if low.startswith("/links") or LINKS_RE.search(low):
-        tg_send(
-            chat_id, "Quick Links:",
+    if low.startswith("/links") or re.search(r"\b(links?)\b", low):
+        tg_send(chat_id, "Quick Links:",
             buttons=[
                 [{"text":"🌐 Website", "url": LINKS["website"]}],
                 [{"text":"🍣 Buy on Sushi", "url": LINKS["buy"]}],
@@ -308,19 +301,17 @@ def telegram():
             ],
             reply_to=mid
         )
-        return jsonify({"ok": True})
+        return jsonify({"ok":True})
 
-    if low.startswith("/buy") or BUY_RE.search(low):
-        tg_send(
-            chat_id, "Buy TBP:",
-            buttons=[[{"text": "SushiSwap (Polygon)", "url": LINKS["buy"]}]],
+    if low.startswith("/buy") or re.search(r"\b(buy|kauf|kaufen)\b", low):
+        tg_send(chat_id, "Buy TBP:",
+            buttons=[[{"text":"SushiSwap (Polygon)", "url": LINKS["buy"]}]],
             reply_to=mid
         )
-        return jsonify({"ok": True})
+        return jsonify({"ok":True})
 
-    if low.startswith("/chart") or CHART_RE.search(low):
-        tg_send(
-            chat_id, "Charts:",
+    if low.startswith("/chart") or re.search(r"\b(chart|charts)\b", low):
+        tg_send(chat_id, "Charts:",
             buttons=[
                 [{"text":"DexScreener","url": LINKS["dexscreener"]}],
                 [{"text":"DEXTools","url": LINKS["dextools"]}],
@@ -328,19 +319,33 @@ def telegram():
             ],
             reply_to=mid
         )
-        return jsonify({"ok": True})
+        return jsonify({"ok":True})
 
-    if low.startswith("/price") or PRICE_RE.search(low):
+    if low.startswith("/price") or re.search(r"\b(preis|price|kurs)\b", low):
         tg_send(chat_id, format_price_block(), reply_to=mid)
-        return jsonify({"ok": True})
+        return jsonify({"ok":True})
 
-    # figure language
-    lang = prefs["lang"] if prefs["lang"] != "auto" else detect_lang(txt)
+    # /img prompt …
+    m_img = IMG_RE.match(txt)
+    if m_img:
+        prompt = txt.split(" ", 1)[1].strip() if " " in txt else ""
+        safe = safe_image_prompt(prompt)
+        if not safe:
+            tg_send(chat_id, "❌ Prompt blockiert oder leer (NSFW/illegal).", reply_to=mid)
+            return jsonify({"ok":True})
+        tg_send(chat_id, "🎨 Erzeuge Bild…", reply_to=mid)
+        png = openai_image_b64(safe, size="1024x1024")
+        if not png:
+            tg_send(chat_id, "⚠️ Bildgenerierung fehlgeschlagen.", reply_to=mid)
+        else:
+            tg_send_photo(chat_id, png, caption="✅ Fertig.", reply_to=mid)
+        return jsonify({"ok":True})
 
-    # main route (no auto-links)
-    ans = route_intent(txt, lang=lang, tone=prefs["tone"], web=False, chat_id=chat_id, mid=mid)
+    # main answer (no auto-links)
+    lang = prefs["lang"] if prefs["lang"]!="auto" else detect_lang(txt)
+    ans = route_intent(txt, lang=lang, tone=prefs["tone"], web=False)
     tg_send(chat_id, ans, reply_to=mid)
-    return jsonify({"ok": True})
+    return jsonify({"ok":True})
 
 # =========================
 # MAIN
