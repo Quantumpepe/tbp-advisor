@@ -1,5 +1,6 @@
-# server.py — TBP-AI v5.3
-# Adds: Auto-posting scheduler + engagement (quizzes, questions), keeps DE/EN + humor
+# server.py — TBP-AI v5.4
+# Adds: auto "About TBP" post every 10h or after ~25 chat messages (per chat)
+# Keeps: auto-post scheduler, DE/EN, humor modes, /price /chart /buy /links, image gen, web /ask
 # -*- coding: utf-8 -*-
 
 import os, re, base64, time, random, threading, requests
@@ -39,6 +40,11 @@ CORS(app)
 PREFS = {}     # chat_id -> {"lang": "auto|de|en", "tone":"pro|fun"}
 AUTOP = {}     # chat_id -> {"on": bool, "interval": int (sec), "next": ts, "cycle": int}
 
+# NEW: explain state per chat (for periodic TBP intro)
+EXPLAIN = {}   # chat_id -> {"last": ts, "count": int}
+EXPLAIN_INTERVAL = 10 * 3600      # 10 hours
+EXPLAIN_COUNT_TRIG = 25           # ~25 incoming messages
+
 def now(): return int(time.time())
 
 def get_prefs(chat_id):
@@ -52,6 +58,24 @@ def start_autopost(chat_id, minutes=60):
 
 def stop_autopost(chat_id):
     AUTOP[chat_id] = {"on": False, "interval": 0, "next": 0, "cycle": 0}
+
+def inc_explain_counter(chat_id):
+    st = EXPLAIN.get(chat_id) or {"last": 0, "count": 0}
+    st["count"] = st.get("count", 0) + 1
+    EXPLAIN[chat_id] = st
+    return st
+
+def should_explain(chat_id):
+    st = EXPLAIN.get(chat_id) or {"last": 0, "count": 0}
+    t  = now()
+    if st["count"] >= EXPLAIN_COUNT_TRIG:
+        return True
+    if (t - st.get("last", 0)) >= EXPLAIN_INTERVAL:
+        return True
+    return False
+
+def mark_explained(chat_id):
+    EXPLAIN[chat_id] = {"last": now(), "count": 0}
 
 # =========================
 # LIVE DATA (price/stats)
@@ -277,6 +301,48 @@ def tg_send_dice(chat_id, emoji="🏀"):
         pass
 
 # =========================
+# EXPLAIN TBP BLOCK
+# =========================
+def explain_text(lang="en"):
+    if lang == "de":
+        return (
+            "🧠 **Was ist TBP (TurboPepe-AI)?**\n"
+            "• Meme-Token auf Polygon (POL)\n"
+            "• LP geburnt, 0 % Tax, transparente Tokenverteilung\n"
+            "• Live-Daten & Antworten direkt vom Bot\n"
+            "• Ziel: Community-Wachstum + Tooling (Auto-Posts, Stats, später X-Bots)\n\n"
+            "🔭 **Wohin geht’s?**\n"
+            "• Listings (Tracker), stabile Liquidity, aktive Community\n"
+            "• Mehr Automationen (Alerts, Preis-Prompts, Mini-Quizzes)\n"
+            "• Kooperationen & Memes — Spaß bleibt Kern, Seriosität im Handling\n"
+        )
+    return (
+        "🧠 **What is TBP (TurboPepe-AI)?**\n"
+        "• Meme token on Polygon (POL)\n"
+        "• Burned LP, 0% tax, transparent token split\n"
+        "• Live stats & answers via the bot\n"
+        "• Goal: grow community + tooling (auto posts, stats, later X-bots)\n\n"
+        "🔭 **Where is it going?**\n"
+        "• Listings (trackers), steady liquidity, active community\n"
+        "• More automations (alerts, price prompts, mini-quizzes)\n"
+        "• Collabs & memes — fun core, serious handling\n"
+    )
+
+def maybe_send_explain(chat_id, lang):
+    """Send 'About TBP' if 10h passed or ~25 msgs since last explain."""
+    if not should_explain(chat_id):
+        return
+    text = explain_text(lang)
+    buttons = [
+        [{"text":"🍣 Sushi", "url": LINKS["buy"]},
+         {"text":"📊 Chart", "url": LINKS["dexscreener"]}],
+        [{"text":"📜 Scan", "url": LINKS["contract"]},
+         {"text":"🌐 Site", "url": LINKS["website"]}],
+    ]
+    tg_send(chat_id, text, buttons=buttons)
+    mark_explained(chat_id)
+
+# =========================
 # TELEGRAM WEBHOOK
 # =========================
 @app.route("/telegram", methods=["POST"])
@@ -291,11 +357,14 @@ def telegram():
     prefs = get_prefs(chat_id)
     low = txt.lower()
 
+    # bump counters (only on user messages)
+    inc_explain_counter(chat_id)
+
     # language quick switches
     if low in ("english","englisch","/lang en"):
-        prefs["lang"] = "en"; tg_send(chat_id,"Okay, English only. 🇬🇧",reply_to=mid); return jsonify({"ok":True})
+        prefs["lang"] = "en"; tg_send(chat_id,"Okay, English only. 🇬🇧",reply_to=mid); mark_explained(chat_id); return jsonify({"ok":True})
     if low in ("deutsch","german","/lang de"):
-        prefs["lang"] = "de"; tg_send(chat_id,"Alles klar, nur Deutsch. 🇩🇪",reply_to=mid);  return jsonify({"ok":True})
+        prefs["lang"] = "de"; tg_send(chat_id,"Alles klar, nur Deutsch. 🇩🇪",reply_to=mid); mark_explained(chat_id); return jsonify({"ok":True})
 
     # tone
     if low.startswith("/tone"):
@@ -320,6 +389,7 @@ def telegram():
         tg_send(chat_id,
                 f"Hi, ich bin {BOT_NAME}. Befehle: /price /chart /buy /links /img <prompt> /lang de|en /tone pro|fun /autopost on [min]|off",
                 reply_to=mid)
+        mark_explained(chat_id)
         return jsonify({"ok":True})
 
     if low.startswith("/links") or LINKS_RE.search(low):
@@ -359,6 +429,7 @@ def telegram():
     if low.startswith("/price") or PRICE_RE.search(low):
         lang = prefs["lang"] if prefs["lang"]!="auto" else detect_lang(txt)
         tg_send(chat_id, format_price_block(lang), reply_to=mid)
+        maybe_send_explain(chat_id, lang)   # after price, maybe refresh explain
         return jsonify({"ok":True})
 
     # /img prompt …
@@ -381,13 +452,15 @@ def telegram():
     lang = prefs["lang"] if prefs["lang"]!="auto" else detect_lang(txt)
     ans = route_intent(txt, lang=lang, tone=prefs["tone"], web=False)
     tg_send(chat_id, ans, reply_to=mid)
+
+    # maybe post periodic explanation
+    maybe_send_explain(chat_id, lang)
     return jsonify({"ok":True})
 
 # =========================
 # AUTOPOST SCHEDULER
 # =========================
 def compose_autopost(chat_id):
-    """Rotate through 4 lightweight content types."""
     prefs = get_prefs(chat_id)
     lang  = prefs["lang"] if prefs["lang"]!="auto" else "en"
     state = AUTOP.get(chat_id) or {}
@@ -396,22 +469,18 @@ def compose_autopost(chat_id):
     buttons = [
         [{"text":"🍣 Buy", "url": LINKS["buy"]},
          {"text":"📊 Chart", "url": LINKS["dexscreener"]}],
-        [{"text":"📜 Scan", "url": LINKS["contract"]},
+        [{"text":"📜 Ca", "url": LINKS["contract"]},
          {"text":"🌐 Site", "url": LINKS["website"]}],
     ]
 
     if cycle == 0:
-        # Live price block
         text = ("📡 Live Update\n" + format_price_block(lang))
     elif cycle == 1:
-        # One-liner + CTA
         text = ("🐸 " + one_liner(lang) + ("\nLet’s hop! 🚀" if lang=="en" else "\nLos geht’s! 🚀"))
     elif cycle == 2:
-        # Community question
         text = ("Question: What should TBP post next — memes or analytics?" if lang=="en"
                 else "Frage: Was soll TBP als Nächstes posten — Memes oder Analysen?")
     else:
-        # Mini quiz A/B
         if lang=="en":
             text = "Quick poll: Which DEX do you use more for TBP?\nA) SushiSwap  B) QuickSwap  C) Both"
         else:
@@ -428,7 +497,6 @@ def autopost_loop():
                 if t >= cfg.get("next", 0):
                     text, buttons = compose_autopost(chat_id)
                     tg_send(chat_id, text, buttons=buttons)
-                    # kleine Animation ~30% der Fälle
                     if random.random() < 0.3:
                         tg_send_dice(chat_id, emoji=random.choice(["🏀","🎯","🎲"]))
                     cfg["cycle"] = (cfg.get("cycle", 0) + 1) % 4
