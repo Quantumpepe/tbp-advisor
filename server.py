@@ -1,7 +1,8 @@
-# server.py — TBP-AI v5.1 (adds image generation for TG + Web)
+# server.py — TBP-AI v5.3
+# Adds: Auto-posting scheduler + engagement (quizzes, questions), keeps DE/EN + humor
 # -*- coding: utf-8 -*-
 
-import os, re, base64, requests
+import os, re, base64, time, random, threading, requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -10,7 +11,7 @@ from flask_cors import CORS
 # =========================
 BOT_NAME       = "TBP-AI"
 MODEL_NAME     = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-IMG_MODEL      = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1")  # OpenAI Image model
+IMG_MODEL      = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 
@@ -33,16 +34,24 @@ app = Flask(__name__)
 CORS(app)
 
 # =========================
-# PREFERENCES (per chat)
+# PREFERENCES & AUTOPOST
 # =========================
-PREFS = {}  # chat_id -> {"lang": "auto|de|en", "tone":"pro|fun"}
+PREFS = {}     # chat_id -> {"lang": "auto|de|en", "tone":"pro|fun"}
+AUTOP = {}     # chat_id -> {"on": bool, "interval": int (sec), "next": ts, "cycle": int}
+
+def now(): return int(time.time())
 
 def get_prefs(chat_id):
     d = PREFS.get(chat_id) or {"lang": "auto", "tone": "pro"}
     PREFS[chat_id] = d
     return d
-def set_lang(chat_id, lang): get_prefs(chat_id)["lang"] = lang
-def set_tone(chat_id, tone): get_prefs(chat_id)["tone"] = tone
+
+def start_autopost(chat_id, minutes=60):
+    sec = max(300, int(minutes) * 60)  # min 5 min
+    AUTOP[chat_id] = {"on": True, "interval": sec, "next": now()+sec, "cycle": 0}
+
+def stop_autopost(chat_id):
+    AUTOP[chat_id] = {"on": False, "interval": 0, "next": 0, "cycle": 0}
 
 # =========================
 # LIVE DATA (price/stats)
@@ -97,19 +106,19 @@ def get_market_stats():
     except: vol = None
     return {"change_24h": change, "liquidity": liq, "volume": vol}
 
-def format_price_block():
+def format_price_block(lang="en"):
     p = get_live_price()
     s = get_market_stats()
     if not p:
-        return "💰 Price unavailable"
-    out = [f"💰 Price: ${p:0.12f}"]
+        return "💰 Price unavailable" if lang=="en" else "💰 Preis derzeit nicht verfügbar"
+    out = [("💰 Price" if lang=="en" else "💰 Preis") + f": ${p:0.12f}"]
     if s.get("change_24h") not in (None, "null", ""):
-        out.append(f"📈 24h: {s['change_24h']}%")
+        out.append(("📈 24h" if lang=="en" else "📈 24h") + f": {s['change_24h']}%")
     if s.get("liquidity") not in (None, "null", ""):
-        try: out.append(f"💧 Liquidity: ${int(float(s['liquidity'])):,}")
+        try: out.append(("💧 Liquidity" if lang=="en" else "💧 Liquidität") + f": ${int(float(s['liquidity'])):,}")
         except: pass
     if s.get("volume") not in (None, "null", ""):
-        try: out.append(f"🔄 Volume 24h: ${int(float(s['volume'])):,}")
+        try: out.append(("🔄 Volume 24h" if lang=="en" else "🔄 Volumen 24h") + f": ${int(float(s['volume'])):,}")
         except: pass
     return "\n".join(out)
 
@@ -125,15 +134,15 @@ def detect_lang(text):
 SYSTEM_BASE = (
     "You are TBP-AI, the official assistant of TurboPepe-AI (TBP).\n"
     "Never give financial advice or promises. No price predictions.\n"
-    "Do NOT include links unless explicitly asked with words like buy, chart, links, website, x, telegram, contract.\n"
+    "Do NOT include links unless explicitly asked with keywords (buy, chart, links, website, x, telegram, contract).\n"
 )
 
 def system_prompt(lang, tone):
     if lang == "de":
-        style = "Schreibe klar, kurz, sachlich."
-        if tone == "fun": style = "Schreibe kurz, witzig, aber sachlich korrekt."
+        style = "Schreibe klar und knapp; wenn 'fun': witzig aber korrekt."
+        if tone == "fun": style = "Schreibe kurz, witzig, aber korrekt."
         return SYSTEM_BASE + style + "\nAntworte ausschließlich auf Deutsch."
-    style = "Write clearly, concisely, objectively."
+    style = "Write concise and clear; if 'fun': short, witty, but factual."
     if tone == "fun": style = "Write short, witty, but factual."
     return SYSTEM_BASE + style + "\nAnswer in English only."
 
@@ -166,7 +175,6 @@ def safe_image_prompt(p):
     return p.strip()
 
 def openai_image_b64(prompt, size="1024x1024"):
-    """Returns (bytes_png) or None."""
     if not OPENAI_API_KEY: return None
     try:
         r = requests.post(
@@ -189,19 +197,19 @@ PRICE_RE   = re.compile(r"\b(preis|price|kurs)\b", re.I)
 BUY_RE     = re.compile(r"\b(buy|kauf|kaufen)\b", re.I)
 CHART_RE   = re.compile(r"\b(chart|charts)\b", re.I)
 LINKS_RE   = re.compile(r"\b(links?)\b", re.I)
-IMG_RE     = re.compile(r"^/(img|image)\b", re.I)
+IMG_CMD_RE = re.compile(r"^/(img|image)\b", re.I)
 
 def one_liner(lang="en"):
     if lang == "de":
-        return ("TBP (TurboPepe-AI) ist ein Meme-Token auf Polygon mit "
-                "transparenter Struktur (LP geburnt, 0 % Tax) und einem Bot, der Live-Daten liefert.")
-    return ("TBP (TurboPepe-AI) is a Polygon meme token with a transparent setup "
-            "(burned LP, 0% tax) and an assistant that reports live on-chain data.")
+        return ("TBP (TurboPepe-AI) ist ein Meme-Token auf Polygon: LP geburnt, 0 % Tax, "
+                "mit einem Bot, der Live-Daten & Antworten liefert.")
+    return ("TBP (TurboPepe-AI) is a Polygon meme token: burned LP, 0% tax, "
+            "with a bot that answers and posts live stats.")
 
 def route_intent(q, lang, tone, web=False):
     low = (q or "").lower()
     if WHAT_IS_RE.search(low): return one_liner(lang)
-    if PRICE_RE.search(low) or low.startswith("/price"): return format_price_block()
+    if PRICE_RE.search(low) or low.startswith("/price"): return format_price_block(lang)
     if (BUY_RE.search(low) or low.startswith("/buy")) and web:   return "Open SushiSwap:\n" + LINKS["buy"]
     if (CHART_RE.search(low) or low.startswith("/chart")) and web: return "Charts:\n" + LINKS["dexscreener"]
     return ai_call(q, lang=lang, tone=tone)
@@ -230,14 +238,14 @@ def image_api():
     return jsonify({"image": data_url, "size": size})
 
 # =========================
-# TELEGRAM
+# TELEGRAM SENDERS
 # =========================
-def tg_send(chat_id, text, buttons=None, reply_to=None):
+def tg_send(chat_id, text, buttons=None, reply_to=None, markdown=True):
     if not TELEGRAM_TOKEN: return
     payload = {
         "chat_id": chat_id,
         "text": text,
-        "parse_mode": "Markdown",
+        "parse_mode": "Markdown" if markdown else "HTML",
         "disable_web_page_preview": False,
     }
     if buttons:  payload["reply_markup"] = {"inline_keyboard": buttons}
@@ -260,6 +268,17 @@ def tg_send_photo(chat_id, png_bytes, caption=None, reply_to=None):
     except Exception:
         pass
 
+def tg_send_dice(chat_id, emoji="🏀"):
+    if not TELEGRAM_TOKEN: return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDice"
+        requests.post(url, data={"chat_id": chat_id, "emoji": emoji}, timeout=10)
+    except Exception:
+        pass
+
+# =========================
+# TELEGRAM WEBHOOK
+# =========================
 @app.route("/telegram", methods=["POST"])
 def telegram():
     u = request.json or {}
@@ -273,21 +292,37 @@ def telegram():
     low = txt.lower()
 
     # language quick switches
-    if low in ("english","englisch","/lang en"): set_lang(chat_id,"en"); tg_send(chat_id,"Okay, English only. 🇬🇧",reply_to=mid); return jsonify({"ok":True})
-    if low in ("deutsch","german","/lang de"):  set_lang(chat_id,"de"); tg_send(chat_id,"Alles klar, nur Deutsch. 🇩🇪",reply_to=mid);  return jsonify({"ok":True})
+    if low in ("english","englisch","/lang en"):
+        prefs["lang"] = "en"; tg_send(chat_id,"Okay, English only. 🇬🇧",reply_to=mid); return jsonify({"ok":True})
+    if low in ("deutsch","german","/lang de"):
+        prefs["lang"] = "de"; tg_send(chat_id,"Alles klar, nur Deutsch. 🇩🇪",reply_to=mid);  return jsonify({"ok":True})
 
     # tone
     if low.startswith("/tone"):
-        if "fun" in low: set_tone(chat_id,"fun"); tg_send(chat_id,"Humor an. 🐸✨",reply_to=mid)
-        else:            set_tone(chat_id,"pro"); tg_send(chat_id,"Sachlich aktiv. ✅",reply_to=mid)
+        if "fun" in low: prefs["tone"]="fun"; tg_send(chat_id,"Humor an. 🐸✨",reply_to=mid)
+        else:            prefs["tone"]="pro"; tg_send(chat_id,"Sachlich aktiv. ✅",reply_to=mid)
         return jsonify({"ok":True})
 
-    # basic commands
+    # autopost controls
+    if low.startswith("/autopost"):
+        parts = low.split()
+        if len(parts)>=2 and parts[1]=="on":
+            minutes = int(parts[2]) if len(parts)>=3 and parts[2].isdigit() else 60
+            start_autopost(chat_id, minutes)
+            tg_send(chat_id, f"🔁 Auto-Posting ON, alle {minutes} min.", reply_to=mid)
+        else:
+            stop_autopost(chat_id)
+            tg_send(chat_id, "⏹ Auto-Posting OFF.", reply_to=mid)
+        return jsonify({"ok":True})
+
+    # quick commands
     if low.startswith("/start"):
-        tg_send(chat_id, f"Hi, ich bin {BOT_NAME}. Befehle: /price /chart /buy /links /img <prompt> /lang de|en /tone pro|fun", reply_to=mid)
+        tg_send(chat_id,
+                f"Hi, ich bin {BOT_NAME}. Befehle: /price /chart /buy /links /img <prompt> /lang de|en /tone pro|fun /autopost on [min]|off",
+                reply_to=mid)
         return jsonify({"ok":True})
 
-    if low.startswith("/links") or re.search(r"\b(links?)\b", low):
+    if low.startswith("/links") or LINKS_RE.search(low):
         tg_send(chat_id, "Quick Links:",
             buttons=[
                 [{"text":"🌐 Website", "url": LINKS["website"]}],
@@ -303,14 +338,14 @@ def telegram():
         )
         return jsonify({"ok":True})
 
-    if low.startswith("/buy") or re.search(r"\b(buy|kauf|kaufen)\b", low):
+    if low.startswith("/buy") or BUY_RE.search(low):
         tg_send(chat_id, "Buy TBP:",
             buttons=[[{"text":"SushiSwap (Polygon)", "url": LINKS["buy"]}]],
             reply_to=mid
         )
         return jsonify({"ok":True})
 
-    if low.startswith("/chart") or re.search(r"\b(chart|charts)\b", low):
+    if low.startswith("/chart") or CHART_RE.search(low):
         tg_send(chat_id, "Charts:",
             buttons=[
                 [{"text":"DexScreener","url": LINKS["dexscreener"]}],
@@ -321,12 +356,13 @@ def telegram():
         )
         return jsonify({"ok":True})
 
-    if low.startswith("/price") or re.search(r"\b(preis|price|kurs)\b", low):
-        tg_send(chat_id, format_price_block(), reply_to=mid)
+    if low.startswith("/price") or PRICE_RE.search(low):
+        lang = prefs["lang"] if prefs["lang"]!="auto" else detect_lang(txt)
+        tg_send(chat_id, format_price_block(lang), reply_to=mid)
         return jsonify({"ok":True})
 
     # /img prompt …
-    m_img = IMG_RE.match(txt)
+    m_img = IMG_CMD_RE.match(txt)
     if m_img:
         prompt = txt.split(" ", 1)[1].strip() if " " in txt else ""
         safe = safe_image_prompt(prompt)
@@ -346,6 +382,62 @@ def telegram():
     ans = route_intent(txt, lang=lang, tone=prefs["tone"], web=False)
     tg_send(chat_id, ans, reply_to=mid)
     return jsonify({"ok":True})
+
+# =========================
+# AUTOPOST SCHEDULER
+# =========================
+def compose_autopost(chat_id):
+    """Rotate through 4 lightweight content types."""
+    prefs = get_prefs(chat_id)
+    lang  = prefs["lang"] if prefs["lang"]!="auto" else "en"
+    state = AUTOP.get(chat_id) or {}
+    cycle = state.get("cycle", 0) % 4
+
+    buttons = [
+        [{"text":"🍣 Buy", "url": LINKS["buy"]},
+         {"text":"📊 Chart", "url": LINKS["dexscreener"]}],
+        [{"text":"📜 Scan", "url": LINKS["contract"]},
+         {"text":"🌐 Site", "url": LINKS["website"]}],
+    ]
+
+    if cycle == 0:
+        # Live price block
+        text = ("📡 Live Update\n" + format_price_block(lang))
+    elif cycle == 1:
+        # One-liner + CTA
+        text = ("🐸 " + one_liner(lang) + ("\nLet’s hop! 🚀" if lang=="en" else "\nLos geht’s! 🚀"))
+    elif cycle == 2:
+        # Community question
+        text = ("Question: What should TBP post next — memes or analytics?" if lang=="en"
+                else "Frage: Was soll TBP als Nächstes posten — Memes oder Analysen?")
+    else:
+        # Mini quiz A/B
+        if lang=="en":
+            text = "Quick poll: Which DEX do you use more for TBP?\nA) SushiSwap  B) QuickSwap  C) Both"
+        else:
+            text = "Mini-Umfrage: Welchen DEX nutzt du öfter für TBP?\nA) SushiSwap  B) QuickSwap  C) Beides"
+
+    return text, buttons
+
+def autopost_loop():
+    while True:
+        try:
+            t = now()
+            for chat_id, cfg in list(AUTOP.items()):
+                if not cfg.get("on"): continue
+                if t >= cfg.get("next", 0):
+                    text, buttons = compose_autopost(chat_id)
+                    tg_send(chat_id, text, buttons=buttons)
+                    # kleine Animation ~30% der Fälle
+                    if random.random() < 0.3:
+                        tg_send_dice(chat_id, emoji=random.choice(["🏀","🎯","🎲"]))
+                    cfg["cycle"] = (cfg.get("cycle", 0) + 1) % 4
+                    cfg["next"]  = t + cfg.get("interval", 3600)
+        except Exception:
+            pass
+        time.sleep(30)
+
+threading.Thread(target=autopost_loop, daemon=True).start()
 
 # =========================
 # MAIN
