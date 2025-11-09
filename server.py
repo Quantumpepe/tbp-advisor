@@ -185,7 +185,6 @@ def sanitize_persona(ans: str) -> str:
     return ans
 
 def build_system():
-    # Facts aus DB anhängen (leichtes Langzeitwissen)
     facts = list_facts(20)
     facts_block = ""
     if facts:
@@ -194,41 +193,41 @@ def build_system():
 
     return (
         facts_block +
-        "You are TBP-AI, the official assistant of TurboPepe-AI (TBP) on Polygon.\n"
-        "Answer bilingually (DE/EN) based on the user's language.\n"
-        "Persona: Smart, fast, confident, meme-savvy. Competitive tone allowed, but no insults or naming competitors.\n"
-        "No financial advice. No promises.\n"
-        "If asked for purpose/vision, emphasize AI-driven autonomy, transparency, and community growth.\n"
-        "If asked for NFTs, say TBP Gold/NFT info is currently offline/unavailable.\n"
-        "Do NOT invent live data. Only mention price/stats when provided by the tool layer.\n"
+        "You are TBP-AI, the official meme-assistant of TurboPepe-AI (TBP) 🐸.\n"
+        "Answer bilingually (DE/EN) with humor, emoji and meme-style tone.\n"
+        "Be witty, friendly, slightly chaotic, but factual when asked.\n"
+        "Focus on TBP's AI autonomy, transparency, burned liquidity and no taxes.\n"
+        "Never give financial advice. No promises.\n"
+        "Use bullet points, emojis, and short sections for clarity.\n"
+        "If asked about NFTs, say TBP Gold NFTs are offline.\n"
     )
 
 def build_links(lang: str, needs):
+    """Clickable markdown-style links (work in Telegram + Web)"""
     L = {
-        "website":  "Website" if lang=="en" else "Webseite",
-        "telegram": "Telegram" if lang=="en" else "Telegram-Gruppe",
-        "x":        "X (Twitter)",
-        "buy":      "Buy on Sushi" if lang=="en" else "Auf Sushi kaufen",
-        "contract": "Contract",
-        "pool":     "Pool",
-        "gecko":    "GeckoTerminal",
-        "dextools": "DEXTools",
-        "dexscreener": "DexScreener",
-        "scan":     "Polygonscan",
+        "website":  "🌐 Website" if lang=="en" else "🌐 Webseite",
+        "telegram": "💬 Telegram",
+        "x":        "🐦 X (Twitter)",
+        "buy":      "💸 Buy on Sushi" if lang=="en" else "💸 Auf Sushi kaufen",
+        "contract": "📜 Polygonscan",
+        "pool":     "📊 Charts",
     }
+
     out = []
-    if "website"  in needs: out.append(f"• {L['website']}: {LINKS['website']}")
-    if "buy"      in needs: out.append(f"• {L['buy']}: {LINKS['buy']}")
-    if "contract" in needs: out.append(f"• {L['scan']}: {LINKS['contract_scan']}")
+    if "website"  in needs: out.append(f"[{L['website']}]({LINKS['website']})")
+    if "buy"      in needs: out.append(f"[{L['buy']}]({LINKS['buy']})")
+    if "contract" in needs: out.append(f"[{L['contract']}]({LINKS['contract_scan']})")
     if "pool"     in needs:
         out += [
-            f"• {L['gecko']}: {LINKS['gecko']}",
-            f"• {L['dextools']}: {LINKS['dextools']}",
-            f"• {L['dexscreener']}: {LINKS['dexscreener']}",
+            f"[GeckoTerminal]({LINKS['gecko']})",
+            f"[DEXTools]({LINKS['dextools']})",
+            f"[DexScreener]({LINKS['dexscreener']})",
         ]
-    if "telegram" in needs: out.append(f"• {L['telegram']}: {LINKS['telegram']}")
-    if "x"        in needs: out.append(f"• X: {LINKS['x']}")
+    if "telegram" in needs: out.append(f"[{L['telegram']}]({LINKS['telegram']})")
+    if "x"        in needs: out.append(f"[{L['x']}]({LINKS['x']})")
+
     return "" if not out else ("\n\n— Quick Links —\n" + "\n".join(out))
+
 
 def linkify(user_q: str, ans: str) -> str:
     """
