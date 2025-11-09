@@ -1,10 +1,12 @@
-# server.py  — TBP-AI unified backend (Web + Telegram)
+# server.py  — TBP-AI unified backend (Web + Telegram) with Memory
 # -*- coding: utf-8 -*-
 
 import os
 import re
 import json
 import time
+import sqlite3
+from datetime import datetime
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -16,6 +18,7 @@ from flask_cors import CORS
 BOT_NAME       = "TBP-AI"
 MODEL_NAME     = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 
 # TBP on Polygon
 TBP_CONTRACT = "0x50c40e03552A42fbE41b2507d522F56d7325D1F2"
@@ -38,11 +41,76 @@ BURNED      = 10_000_000_000
 OWNER       = 14_000_000_000
 CIRC_SUPPLY = MAX_SUPPLY - BURNED - OWNER
 
-# Gesprächskontext
+# Gesprächskontext (kurz)
 MEM = {"ctx": []}
+
+# DB (persistentes Mini-Memory)
+DB_PATH = os.environ.get("MEMORY_DB", "memory.db")
 
 app = Flask(__name__)
 CORS(app)
+
+# ================================================================
+# == SQLITE MEMORY ==
+# ================================================================
+
+def db():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
+
+def init_db():
+    conn = db()
+    conn.execute("""CREATE TABLE IF NOT EXISTS messages(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT, sender TEXT, text TEXT, ts TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS facts(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        k TEXT UNIQUE, v TEXT, source TEXT, ts TEXT
+    )""")
+    conn.commit()
+
+def log_msg(chat_id, sender, text):
+    try:
+        conn = db()
+        conn.execute("INSERT INTO messages(chat_id,sender,text,ts) VALUES(?,?,?,?)",
+                     (str(chat_id), sender, text, datetime.utcnow().isoformat()+"Z"))
+        conn.commit()
+    except Exception:
+        pass
+
+def set_fact(k, v, source="telegram"):
+    k = (k or "").strip().lower()
+    v = (v or "").strip()
+    if not k or not v:
+        return False
+    try:
+        conn = db()
+        conn.execute("INSERT INTO facts(k,v,source,ts) VALUES(?,?,?,?) "
+                     "ON CONFLICT(k) DO UPDATE SET v=excluded.v, ts=excluded.ts, source=excluded.source",
+                     (k, v, source, datetime.utcnow().isoformat()+"Z"))
+        conn.commit()
+        return True
+    except Exception:
+        return False
+
+def del_fact(k):
+    try:
+        conn = db()
+        conn.execute("DELETE FROM facts WHERE k=?", ((k or "").strip().lower(),))
+        conn.commit()
+        return conn.total_changes > 0
+    except Exception:
+        return False
+
+def list_facts(limit=10):
+    try:
+        conn = db()
+        cur = conn.execute("SELECT k,v FROM facts ORDER BY ts DESC LIMIT ?", (limit,))
+        return cur.fetchall()
+    except Exception:
+        return []
 
 # ================================================================
 # == PRICE & MARKET STATS ==
@@ -117,7 +185,15 @@ def sanitize_persona(ans: str) -> str:
     return ans
 
 def build_system():
+    # Facts aus DB anhängen (leichtes Langzeitwissen)
+    facts = list_facts(20)
+    facts_block = ""
+    if facts:
+        pairs = [f"{k}: {v}" for (k,v) in facts]
+        facts_block = "Known TBP facts (user-taught):\n- " + "\n- ".join(pairs) + "\n\n"
+
     return (
+        facts_block +
         "You are TBP-AI, the official assistant of TurboPepe-AI (TBP) on Polygon.\n"
         "Answer bilingually (DE/EN) based on the user's language.\n"
         "Persona: Smart, fast, confident, meme-savvy. Competitive tone allowed, but no insults or naming competitors.\n"
@@ -156,13 +232,11 @@ def build_links(lang: str, needs):
 
 def linkify(user_q: str, ans: str) -> str:
     """
-    Hängt nur dann Live-Preis/Stats an, wenn echte Preis-Absicht (Wortgrenzen!).
-    Verhindert doppelte Preisblöcke.
+    Live-Preis/Stats nur bei Preisabsicht (Wortgrenzen!) und ohne Doppelung.
     """
     low = (user_q or "").lower()
     lang = "de" if is_de(user_q) else "en"
 
-    # Nur bei klarer Preisabsicht
     if WORD_RE.search(low):
         p = get_live_price()
         stats = get_market_stats()
@@ -184,12 +258,9 @@ def linkify(user_q: str, ans: str) -> str:
                     lines.append(("Volumen 24h" if lang=="de" else "Volume 24h") + f": ${vol:,}")
                 except Exception:
                     pass
-        if lines:
-            # Doppel-Ausgabe verhindern, falls AI selbst schon Zahlen erwähnt hat
-            if "TBP-Preis" not in ans and "Current TBP price" not in ans:
-                ans = "\n".join(lines) + "\n\n" + ans
+        if lines and ("TBP-Preis" not in ans and "Current TBP price" not in ans):
+            ans = "\n".join(lines) + "\n\n" + ans
 
-    # Nur Links anhängen, keine erneute Preiswiederholung
     need = []
     if re.search(r"(what is|was ist|tokenomics|buy|kaufen|chart|preis|price|kurs)", low, re.I):
         need += ["website", "buy", "contract", "pool", "telegram", "x"]
@@ -243,6 +314,10 @@ def ai_answer(user_q: str) -> str:
 # == WEB ENDPOINT ==
 # ================================================================
 
+@app.route("/health")
+def health():
+    return jsonify({"ok": True})
+
 @app.route("/ask", methods=["POST"])
 def ask():
     data = request.json or {}
@@ -264,23 +339,33 @@ def ask():
 # ================================================================
 
 def tg_send(chat_id, text, reply_to=None):
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    if not token:
+    if not TELEGRAM_TOKEN:
         return
     try:
-        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            # wichtig: Link-Vorschau **aktiv** lassen → Chart-Preview im Chat
+            "disable_web_page_preview": False,
+        }
         if reply_to:
             payload["reply_to_message_id"] = reply_to
-        requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=10)
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                      json=payload, timeout=10)
     except Exception:
         pass
 
+
+TEACH_RE = re.compile(r"^/teach\s+(.+?)\s*=\s*(.+)$", re.I)
+FORGET_RE = re.compile(r"^/forget\s+(.+)$", re.I)
 
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
     update = request.json or {}
     msg = update.get("message", {}) or {}
-    chat_id = msg.get("chat", {}).get("id")
+    chat = msg.get("chat", {}) or {}
+    chat_id = chat.get("id")
     text = (msg.get("text") or "").strip()
     msg_id = msg.get("message_id")
     low = text.lower()
@@ -288,15 +373,47 @@ def telegram_webhook():
     if not chat_id or not text:
         return jsonify({"ok": True})
 
+    # Log jede Message (für späteres Train/Analyse)
+    log_msg(chat_id, "user", text)
+
+    # Teach / Forget / Memory
+    m = TEACH_RE.match(text)
+    if m:
+        k, v = m.group(1).strip(), m.group(2).strip()
+        ok = set_fact(k, v, source="telegram")
+        tg_send(chat_id, ("✅ Gespeichert: " if ok else "❌ Konnte nicht speichern: ") + f"{k} = {v}", reply_to=msg_id)
+        return jsonify({"ok": True})
+
+    m = FORGET_RE.match(text)
+    if m:
+        k = m.group(1).strip()
+        ok = del_fact(k)
+        tg_send(chat_id, ("🧹 Gelöscht: " if ok else "❌ Nicht gefunden: ") + k, reply_to=msg_id)
+        return jsonify({"ok": True})
+
+    if low.startswith("/mem"):
+        rows = list_facts(20)
+        if not rows:
+            tg_send(chat_id, "🗒️ Noch keine Fakten gespeichert. Beispiel: /teach goal = 800M MC in 3y", reply_to=msg_id)
+        else:
+            lines = ["🧠 TBP-Memory:"]
+            for k, v in rows:
+                lines.append(f"• {k}: {v}")
+            tg_send(chat_id, "\n".join(lines), reply_to=msg_id)
+        return jsonify({"ok": True})
+
     # Commands
     if low.startswith("/start"):
         tg_send(chat_id,
-                f"Hi, ich bin {BOT_NAME}. Frag mich alles zu TBP (DE/EN). Tipp /links für schnelle Links 🚀",
+                f"Hi, ich bin {BOT_NAME}. Frag mich alles zu TBP (DE/EN). "
+                f"Tipp /links • /price • /chart • /stats • /mem • /teach key = value • /forget key 🚀",
                 reply_to=msg_id)
         return jsonify({"ok": True})
 
     if low.startswith("/help"):
-        tg_send(chat_id, "/price • /chart • /links • /stats — oder frag ganz normal (DE/EN).", reply_to=msg_id)
+        tg_send(chat_id,
+                "/price • /chart • /stats • /links • /mem • /teach key = value • /forget key",
+                reply_to=msg_id)
         return jsonify({"ok": True})
 
     if low.startswith("/links"):
@@ -319,7 +436,8 @@ def telegram_webhook():
             try: lines.append(f"🔄 Volume 24h: ${int(float(stats['volume_24h'])):,}")
             except: pass
         if not lines: lines.append("Price currently unavailable.")
-        lines.append(f"Charts: {LINKS['dexscreener']}")
+        # Chart-Preview via Link-Vorschau
+        lines.append(f"📊 Charts: {LINKS['dexscreener']}")
         tg_send(chat_id, "\n".join(lines), reply_to=msg_id)
         return jsonify({"ok": True})
 
@@ -340,7 +458,7 @@ def telegram_webhook():
         tg_send(chat_id, "\n".join(lines), reply_to=msg_id)
         return jsonify({"ok": True})
 
-    # normal flow
+    # normal flow (keine Preisabsicht -> keine Zahlen voranstellen)
     ans = ai_answer(text)
     tg_send(chat_id, ans, reply_to=msg_id)
 
@@ -355,6 +473,7 @@ def telegram_webhook():
 # == MAIN ==
 # ================================================================
 if __name__ == "__main__":
+    init_db()
     port = int(os.environ.get("PORT", 10000))
     print(f"[{BOT_NAME}] starting on :{port}")
     app.run(host="0.0.0.0", port=port)
