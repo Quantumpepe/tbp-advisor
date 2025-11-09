@@ -323,15 +323,15 @@ def tg_send(chat_id, text, reply_to=None, buttons=None, disable_preview=False):
 
 # Image reaction pool
 IMAGE_RESPONSES = [
-    "🔥 TBP vibes at maximum.",
-    "Bro… wer hat dir erlaubt so ein Meme-Level zu droppen? 😂",
-    "That’s iconic. Want laser eyes? 😎🔫",
-    "Ufff… das gehört ins TBP-Museum. 🖼️🐸",
-    "Legendary drop! Meine KI kichert. 🤖😆",
-    "Damn! Pepe in turbo mode! 🚀🐸",
-    "Krankes Bild — Meme-Power! ⚡",
-    "This slaps. Absolute art. 🎨🐸",
-    "Stabil AF. Weiter so. 😎",
+   "🔥 TBP vibes at maximum."
+"Bro... who gave you permission to drop such a meme-level flick? 😂"
+"That's iconic. Want laser eyes? 😎🔫"
+"Ufff... this belongs in the TBP Museum. 🖼️🐸"
+"Legendary drop! My AI is giggling. 🤖😆"
+"Damn! Pepe in turbo mode! 🚀🐸"
+"Sick picture — meme power! ⚡"
+"This slaps. Absolute art. 🎨🐸"
+"Stable AF. Keep it up. 😎"
 ]
 
 # Autopost text
