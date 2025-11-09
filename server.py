@@ -1,78 +1,58 @@
-# server.py
-import os, json
+import os, re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from openai import OpenAI
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
-MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini").strip()
+MODEL  = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+APIKEY = os.environ.get("OPENAI_API_KEY", "")
+client = OpenAI(api_key=APIKEY)
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+SYSTEM = (
+    "Reply concise, precise, helpful, with light humor. "
+    "No promises. If unsure, say so and point to on-chain links. "
+    "You are the official assistant for TurboPepe-AI (TBP) on Polygon."
+)
 
 @app.get("/")
-def root():
-    return "TBP advisor up", 200
-
-@app.get("/health")
 def health():
-    ok = bool(OPENAI_API_KEY) and bool(MODEL)
-    return jsonify(ok=ok, model=MODEL), (200 if ok else 500)
-
-def build_messages(payload):
-    question = (payload.get("question") or "").strip()
-    ctx = payload.get("context") or []
-    user_lang = payload.get("user_lang") or "de"
-
-    system = (
-        "Antworte kurz, präzise, hilfreich und mit leichtem Humor. "
-        "Keine leeren Versprechen. Wenn unsicher, verweise auf On-Chain-Daten."
-    )
-
-    history = "\n".join(ctx[-8:]) if isinstance(ctx, list) else ""
-
-    prompt = f"""Du bist der offizielle Assistent von TurboPepe-AI (TBP).
-Sprache: {user_lang}
-
-Kontext:
-{history}
-
-Frage des Nutzers:
-{question}
-"""
-    return system, prompt
+    return "ok", 200
 
 @app.post("/ask")
 def ask():
+    if not APIKEY:
+        return jsonify({"error": "Missing OPENAI_API_KEY on server"}), 500
+
+    payload = request.get_json(force=True) or {}
+    q   = (payload.get("question") or "").strip()
+    ctx = payload.get("context") or []
+
+    if not q:
+        return jsonify({"error": "Empty question"}), 400
+
+    # einfache Spracherkennung für DE/EN
+    is_de = bool(re.search(r"\b(was|wie|warum|kann|preis|kurs|kosten|listung)\b|[äöüß]", q, re.I))
+    lang  = "German" if is_de else "English"
+
+    messages = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user",   "content": f"Context: {ctx}\n\nQuestion: {q}\nAnswer in {lang}."}
+    ]
+
     try:
-        payload = request.get_json(force=True, silent=True) or {}
-        system, prompt = build_messages(payload)
-
-        if not OPENAI_API_KEY:
-            return jsonify(error="NO_API_KEY"), 500
-        if not MODEL:
-            return jsonify(error="NO_MODEL"), 500
-
-        resp = client.responses.create(
+        resp = client.chat.completions.create(
             model=MODEL,
-            input=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt}
-            ]
+            messages=messages,
+            temperature=0.4,
+            max_tokens=400,
         )
-
-        text = ""
-        for item in resp.output or []:
-            if getattr(item, "type", "") == "output_text":
-                text += item.text
-
-        text = text.strip() or "Ich konnte keine Antwort abrufen. Bitte später erneut versuchen."
-        return jsonify(answer=text, model=MODEL), 200
-
+        text = (resp.choices[0].message.content or "").strip()
+        return jsonify({"answer": text})
     except Exception as e:
-        return jsonify(error="BACKEND_EXCEPTION", detail=str(e)), 500
+        # gib den echten Fehler an den Client zurück, damit du siehst, was los ist
+        return jsonify({"error": str(e)}), 502
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
