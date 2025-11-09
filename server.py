@@ -167,12 +167,21 @@ def build_links(lang, needs):
     return "\n\n— Quick Links —\n" + "\n".join(out)
 
 def linkify(user_q, ans):
-    # Wenn der Nutzer explizit Preis/Kurs fragt, antworte möglichst kurz, Links nur wenn nötig
     low = (user_q or "").lower()
     lang = "de" if is_de(user_q) else "en"
 
-    # Preisfrage → Livewerte zuerst
-    if any(w in low for w in ("price", "preis", "kurs", "chart", "charts")):
+    # --- ROBUSTER PRICE/TRIGGER ---
+    price_re = re.compile(
+        r"\b("
+        r"price|preis|kurs|chart|charts|"
+        r"how\s+much|wieviel|wie\s+viel|"
+        r"aktueller?\s*preis|current\s*price|"
+        r"tbp\s*price|\$?\s*tbp"
+        r")\b",
+        re.I
+    )
+
+    if price_re.search(low):
         p = get_live_price()
         stats = get_market_stats()
         lines = []
@@ -188,15 +197,15 @@ def linkify(user_q, ans):
         if lines:
             ans = "\n".join(lines) + "\n\n" + ans
 
-    # Generische Quick Links bei passenden Themen
+    # Generische Quick-Links
     need = []
     if re.search(r"(what is|was ist|tokenomics|buy|kaufen|chart|preis|kurs)", low, re.I):
         need += ["website","buy","contract","pool","telegram","x"]
-    # Einzigartig machen
     need = list(dict.fromkeys(need))
     if need:
         ans += "\n" + build_links(lang, need)
     return ans
+
 
 
 # ================================================================
