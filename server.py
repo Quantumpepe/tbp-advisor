@@ -1,7 +1,7 @@
-# server.py — TBP-AI unified backend (Web + Telegram) — v7 (with X-Raid Mode)
+# server.py — TBP-AI unified backend (Web + Telegram) — v7-plus
 # -*- coding: utf-8 -*-
 
-import os, re, json, time, threading, random
+import os, re, json, time, threading, random, sqlite3
 from datetime import datetime, timedelta
 import requests
 from flask import Flask, request, jsonify
@@ -17,11 +17,16 @@ OPENAI_MODEL    = os.environ.get("OPENAI_MODEL", "gpt-4o-mini").strip()
 TELEGRAM_TOKEN  = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 ADMIN_SECRET    = os.environ.get("ADMIN_SECRET", "").strip()
 
+# Admins (Telegram numeric IDs, comma-separated)
+ADMIN_IDS_RAW   = os.environ.get("ADMIN_IDS", "").strip()  # e.g. "123,456"
+ADMIN_IDS       = {int(x) for x in re.findall(r"\d+", ADMIN_IDS_RAW)} if ADMIN_IDS_RAW else set()
+
+# SQLite DB (persistent memory)
+DB_PATH         = os.environ.get("MEMORY_DB", "memory.db")
+
 # TBP on Polygon
 TBP_CONTRACT = "0x50c40e03552A42fbE41b2507d522F56d7325D1F2"
 TBP_PAIR     = "0x945c73101e11cc9e529c839d1d75648d04047b0b"  # Sushi pair
-
-LOGO_URL = "https://raw.githubusercontent.com/Quantumpepe/TurboPepe/main/turbopepe22.png"
 
 LINKS = {
     "website":      "https://quantumpepe.github.io/TurboPepe/",
@@ -34,35 +39,85 @@ LINKS = {
     "contract_scan":f"https://polygonscan.com/token/{TBP_CONTRACT}",
 }
 
-# Supply für grobe MC-Schätzung
+# Supply (für grobe MC-Berechnungen, Website nutzt eigenes Script)
 MAX_SUPPLY  = 190_000_000_000
 BURNED      = 10_000_000_000
 OWNER       = 14_000_000_000
 CIRC_SUPPLY = MAX_SUPPLY - BURNED - OWNER
 
-# Memory (leichtgewichtig)
+# In-memory runtime state
 MEM = {
     "ctx": [],
     "last_autopost": None,
     "chat_count": 0,
+    "raid_on": False,
+    "raid_pending": False,
+    "raid_tweet": None,
     "_autopost_started": False,
-}
-
-# X-RAID State (pro Chat)
-RAID = {
-    # chat_id: {
-    #   "active": bool,
-    #   "tweet": str,
-    #   "started": datetime,
-    #   "ends": datetime,
-    #   "reminder_every": int (sec),
-    #   "last_reminder": datetime,
-    #   "score": {user_id: int}
-    # }
 }
 
 app = Flask(__name__)
 CORS(app)
+
+# =========================
+# DB (SQLite) — Memory
+# =========================
+
+def db():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
+
+def init_db():
+    conn = db()
+    conn.execute("""CREATE TABLE IF NOT EXISTS messages(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT, sender TEXT, text TEXT, ts TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS facts(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        k TEXT UNIQUE, v TEXT, source TEXT, ts TEXT
+    )""")
+    conn.commit()
+
+def log_msg(chat_id, sender, text):
+    try:
+        db().execute(
+            "INSERT INTO messages(chat_id,sender,text,ts) VALUES(?,?,?,?)",
+            (str(chat_id), sender, text, datetime.utcnow().isoformat()+"Z")
+        ).connection.commit()
+    except Exception:
+        pass
+
+def set_fact(k, v, source="telegram"):
+    k = (k or "").strip().lower()
+    v = (v or "").strip()
+    if not k or not v: return False
+    try:
+        db().execute(
+            "INSERT INTO facts(k,v,source,ts) VALUES(?,?,?,?) "
+            "ON CONFLICT(k) DO UPDATE SET v=excluded.v, ts=excluded.ts, source=excluded.source",
+            (k, v, source, datetime.utcnow().isoformat()+"Z")
+        ).connection.commit()
+        return True
+    except Exception:
+        return False
+
+def del_fact(k):
+    try:
+        conn = db()
+        cur = conn.execute("DELETE FROM facts WHERE k=?", ((k or "").strip().lower(),))
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception:
+        return False
+
+def list_facts(limit=20):
+    try:
+        cur = db().execute("SELECT k,v FROM facts ORDER BY ts DESC LIMIT ?", (limit,))
+        return cur.fetchall()
+    except Exception:
+        return []
 
 # =========================
 # HELPERS
@@ -70,6 +125,7 @@ CORS(app)
 
 WORD_PRICE = re.compile(r"\b(preis|price|kurs|chart)\b", re.I)
 GER_DET    = re.compile(r"\b(der|die|das|und|nicht|warum|wie|kann|preis|kurs|listung|tokenomics)\b", re.I)
+TWEET_RE   = re.compile(r'https?://(?:x\.com|twitter\.com)/[^/\s]+/status/\d+', re.I)
 
 def is_de(text: str) -> bool:
     return bool(GER_DET.search((text or "").lower()))
@@ -86,9 +142,15 @@ def fmt_usd(x, max_digits=2):
     except Exception:
         return "N/A"
 
-# -------------------------
+def is_admin(uid) -> bool:
+    try:
+        return int(uid) in ADMIN_IDS if ADMIN_IDS else False
+    except Exception:
+        return False
+
+# =========================
 # Market Data
-# -------------------------
+# =========================
 
 def get_live_price():
     # 1) GeckoTerminal
@@ -142,21 +204,28 @@ def get_market_stats():
     except Exception:
         return None
 
-# -------------------------
+# =========================
 # OpenAI (optional)
-# -------------------------
+# =========================
+
+def build_system_prompt():
+    facts = list_facts(20)
+    facts_block = ""
+    if facts:
+        facts_block = "Known TBP facts (user-taught):\n" + "\n".join([f"- {k}: {v}" for (k,v) in facts]) + "\n\n"
+    return (
+        facts_block +
+        "You are TBP-AI, the official assistant of TurboPepe-AI (TBP) on Polygon.\n"
+        "Detect user language. Answer ONLY in that language (DE or EN).\n"
+        "Be concise, friendly, slightly witty; no spam; no link dump.\n"
+        "If asked about NFTs or staking: say they are planned for the future.\n"
+        "No financial advice. No promises.\n"
+    )
 
 def call_openai(question: str, context):
     if not OPENAI_API_KEY:
         return None
-    messages = [{"role": "system", "content": (
-        "You are TBP-AI, the official assistant of TurboPepe-AI (TBP) on Polygon.\n"
-        "Detect user language. Answer ONLY in that language (DE or EN).\n"
-        "When asked generic things (who are you, about TBP, goal), keep it short & friendly.\n"
-        "No financial advice. No promises. Keep links out unless explicitly asked.\n"
-        "If asked about NFTs or staking: say they are planned for the future.\n"
-        "Humor allowed for smalltalk but stay concise.\n"
-    )}]
+    messages = [{"role": "system", "content": build_system_prompt()}]
     for item in context[-6:]:
         role = "user" if item.startswith("You:") else "assistant"
         messages.append({"role": role, "content": item.split(": ", 1)[1] if ": " in item else item})
@@ -166,7 +235,7 @@ def call_openai(question: str, context):
         r = requests.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
-            json={"model": OPENAI_MODEL, "messages": messages, "max_tokens": 320, "temperature": 0.4},
+            json={"model": OPENAI_MODEL, "messages": messages, "max_tokens": 360, "temperature": 0.45},
             timeout=40
         )
         if not r.ok:
@@ -181,9 +250,9 @@ def clean_answer(s: str) -> str:
     s = re.sub(r"(?i)(financial advice|finanzberatung)", "information", s)
     return s.strip()
 
-# -------------------------
-# Auto-Post
-# -------------------------
+# =========================
+# Auto-Post / Raid helpers
+# =========================
 
 def autopost_needed():
     now = datetime.utcnow()
@@ -226,111 +295,25 @@ def start_autopost_background(chat_id: int):
             except Exception:
                 pass
             time.sleep(60)
-    t = threading.Thread(target=loop, daemon=True)
-    t.start()
+    if not MEM["_autopost_started"]:
+        t = threading.Thread(target=loop, daemon=True)
+        t.start()
+        MEM["_autopost_started"] = True
 
-# -------------------------
-# Telegram helpers
-# -------------------------
-
-def tg_send(chat_id, text, reply_to=None, preview=True):
-    if not TELEGRAM_TOKEN: return
-    try:
-        payload = {
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": not preview
-        }
-        if reply_to:
-            payload["reply_to_message_id"] = reply_to
-        requests.post(tg_api("sendMessage"), json=payload, timeout=10)
-    except Exception:
-        pass
-
-def tg_buttons(chat_id, text, buttons):
-    kb = {"inline_keyboard": [[{"text": t, "url": u} for (t,u) in buttons]]}
-    try:
-        requests.post(
-            tg_api("sendMessage"),
-            json={"chat_id": chat_id, "text": text, "reply_markup": kb, "disable_web_page_preview": True, "parse_mode":"HTML"},
-            timeout=10
-        )
-    except Exception:
-        pass
-
-MEME_CAPTIONS = [
-    "Nice photo! Want me to spin a meme from it? 🐸✨",
-    "Fresh pixels detected. Should I add meme power? ⚡",
-    "Clean drop. Caption it, or shall I? 😎",
-]
-
-# -------------------------
-# X-RAID MODE (no X-API; community-driven)
-# -------------------------
-
-def raid_start(chat_id:int, tweet_url:str, duration_min:int=30):
-    RAID[chat_id] = {
-        "active": True,
-        "tweet": tweet_url,
-        "started": datetime.utcnow(),
-        "ends": datetime.utcnow() + timedelta(minutes=duration_min),
-        "reminder_every": 120,  # seconds
-        "last_reminder": None,
-        "score": {}
-    }
+def raid_announce(chat_id: int, tweet_url: str, lang="en"):
+    title = "🐸 RAID MODE ON!" if lang == "en" else "🐸 RAID MODUS AN!"
+    sub   = ("Open the tweet, then Like + Repost + Comment.\n"
+             "Reply here with done or drop a screenshot. Let’s pump the vibes! 🚀"
+             if lang=="en" else
+             "Tweet öffnen, dann Like + Repost + Kommentar.\n"
+             "Antworte hier mit done oder Screenshot. Let’s go! 🚀")
     tg_buttons(
         chat_id,
-        "🐸 <b>RAID MODE ON!</b>\n"
-        "Open the tweet, then <b>Like + Repost + Comment</b>.\n"
-        "Reply here with <code>done</code> or drop a screenshot. Let’s pump the vibes! 🚀",
+        f"{title}\n{sub}",
         [("Open Tweet", tweet_url), ("Chart", LINKS["dexscreener"]), ("Sushi", LINKS["buy"])]
     )
-
-def raid_stop(chat_id:int, reason:str="Raid ended."):
-    st = RAID.get(chat_id)
-    RAID[chat_id] = {"active": False}
-    if st and isinstance(st.get("score"), dict) and st["score"]:
-        board = sorted(st["score"].items(), key=lambda kv: -kv[1])[:5]
-        lines = ["🏆 <b>Raid Top Crew</b>"]
-        for uid, pts in board:
-            lines.append(f"• user <code>{uid}</code>: {pts} pts")
-        tg_send(chat_id, "\n".join(lines), preview=False)
-    tg_send(chat_id, f"🧯 {reason}", preview=False)
-
-def raid_tick(chat_id:int):
-    st = RAID.get(chat_id) or {}
-    if not st.get("active"): return
-    now = datetime.utcnow()
-    if now >= st["ends"]:
-        raid_stop(chat_id, "Time’s up! Great energy, fam! 🐸")
-        return
-    lr = st.get("last_reminder")
-    if (lr is None) or ((now - lr).total_seconds() >= st["reminder_every"]):
-        st["last_reminder"] = now
-        tg_buttons(
-            chat_id,
-            "⚡ <b>RAID REMINDER</b>\nLike • Repost • Comment → then write <code>done</code> here.",
-            [("Open Tweet", st["tweet"])]
-        )
-
-def award_done(chat_id:int, user_id:int):
-    st = RAID.get(chat_id)
-    if not (st and st.get("active")): return
-    st["score"][user_id] = st["score"].get(user_id, 0) + 1
-
-def raid_background_loop():
-    while True:
-        try:
-            for cid, st in list(RAID.items()):
-                if st and st.get("active"):
-                    raid_tick(cid)
-        except Exception:
-            pass
-        time.sleep(8)
-
-# start background thread once
-threading.Thread(target=raid_background_loop, daemon=True).start()
+    tg_buttons(chat_id, "⚡ RAID REMINDER:\nLike + Repost + Comment → then write done here.",
+               [("Open Tweet", tweet_url)])
 
 # =========================
 # FLASK WEB (health/ask/admin)
@@ -363,7 +346,6 @@ def admin_set_webhook():
         return jsonify({"ok": False, "error": str(e)}), 500
     return jsonify({"ok": True, "response": j})
 
-# Web-AI für die Website
 @app.route("/ask", methods=["POST"])
 def ask():
     data = request.json or {}
@@ -372,6 +354,7 @@ def ask():
         return jsonify({"answer": "empty question"}), 200
 
     lang = "de" if is_de(q) else "en"
+
     if WORD_PRICE.search(q):
         p = get_live_price()
         stats = get_market_stats() or {}
@@ -391,8 +374,43 @@ def ask():
     return jsonify({"answer": ans})
 
 # =========================
-# TELEGRAM WEBHOOK
+# TELEGRAM
 # =========================
+
+def tg_send(chat_id, text, reply_to=None, preview=True):
+    if not TELEGRAM_TOKEN: return
+    try:
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": not preview
+        }
+        if reply_to:
+            payload["reply_to_message_id"] = reply_to
+        requests.post(tg_api("sendMessage"), json=payload, timeout=10)
+    except Exception:
+        pass
+
+def tg_buttons(chat_id, text, buttons):
+    kb = {"inline_keyboard": [[{"text": t, "url": u} for (t,u) in buttons]]}
+    try:
+        requests.post(
+            tg_api("sendMessage"),
+            json={"chat_id": chat_id, "text": text, "reply_markup": kb, "disable_web_page_preview": True},
+            timeout=10
+        )
+    except Exception:
+        pass
+
+MEME_CAPTIONS = [
+    "Nice photo! Want me to spin a meme from it? 🐸✨",
+    "Fresh pixels detected. Should I add meme power? ⚡",
+    "Clean drop. Caption it, or shall I? 😎",
+]
+
+TEACH_RE  = re.compile(r"^/teach\s+(.+?)\s*=\s*(.+)$", re.I)
+FORGET_RE = re.compile(r"^/forget\s+(.+)$", re.I)
 
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
@@ -402,21 +420,16 @@ def telegram_webhook():
     chat_id = chat.get("id")
     text = (msg.get("text") or "").strip()
     msg_id = msg.get("message_id")
-    user = msg.get("from", {}) or {}
-    user_id = user.get("id")
+    from_user = msg.get("from", {}) or {}
+    user_id = from_user.get("id")
 
     if not chat_id:
         return jsonify({"ok": True})
 
-    # Autopost-Thread starten (einmalig)
-    try:
-        if not MEM["_autopost_started"]:
-            start_autopost_background(chat_id)
-            MEM["_autopost_started"] = True
-    except Exception:
-        pass
+    # Start background autopost (once)
+    start_autopost_background(chat_id)
 
-    # Bild → englische Caption
+    # Photo → English caption
     if "photo" in msg:
         tg_send(chat_id, random.choice(MEME_CAPTIONS), reply_to=msg_id)
         MEM["chat_count"] += 1
@@ -425,11 +438,38 @@ def telegram_webhook():
     if not text:
         return jsonify({"ok": True})
 
-    low = text.lower()
+    low  = text.lower()
     lang = "de" if is_de(text) else "en"
     MEM["chat_count"] += 1
+    log_msg(chat_id, "user", text)
 
-    # -------- Commands --------
+    # Memory commands
+    m = TEACH_RE.match(text)
+    if m:
+        k, v = m.group(1).strip(), m.group(2).strip()
+        ok = set_fact(k, v, source="telegram")
+        tg_send(chat_id, ("✅ Saved: " if ok else "❌ Could not save: ") + f"{k} = {v}", reply_to=msg_id)
+        return jsonify({"ok": True})
+
+    m = FORGET_RE.match(text)
+    if m:
+        k = m.group(1).strip()
+        ok = del_fact(k)
+        tg_send(chat_id, ("🧹 Deleted: " if ok else "❌ Not found: ") + k, reply_to=msg_id)
+        return jsonify({"ok": True})
+
+    if low.startswith("/mem"):
+        rows = list_facts(20)
+        if not rows:
+            tg_send(chat_id, "🗒️ No facts yet. Example: /teach goal = 800M MC in 3y", reply_to=msg_id)
+        else:
+            lines = ["🧠 TBP Memory:"]
+            for k, v in rows:
+                lines.append(f"• {k}: {v}")
+            tg_send(chat_id, "\n".join(lines), reply_to=msg_id)
+        return jsonify({"ok": True})
+
+    # Commands
     if low.startswith("/start"):
         tg_buttons(
             chat_id,
@@ -441,7 +481,7 @@ def telegram_webhook():
         return jsonify({"ok": True})
 
     if low.startswith("/help"):
-        tg_send(chat_id, "/price • /stats • /chart • /links • /raid start|stop • /raid x <tweet-url>", reply_to=msg_id, preview=False)
+        tg_send(chat_id, "/price • /stats • /chart • /links • /mem • /teach k = v • /forget k • /raid start|stop|status", reply_to=msg_id, preview=False)
         return jsonify({"ok": True})
 
     if low.startswith("/links"):
@@ -474,36 +514,61 @@ def telegram_webhook():
         return jsonify({"ok": True})
 
     if low.startswith("/chart"):
-        tg_buttons(chat_id, say(lang,"📊 Live-Chart:","📊 Live chart:"), [("DexScreener", LINKS["dexscreener"]), ("DEXTools", LINKS["dextools"])])
+        tg_buttons(chat_id, say(lang,"📊 Live-Chart:","📊 Live chart:"),
+                   [("DexScreener", LINKS["dexscreener"]), ("DEXTools", LINKS["dextools"])])
         return jsonify({"ok": True})
 
-    # ---- RAID BASIC ----
+    # RAID (Admins only)
     if low.startswith("/raid"):
-        parts = text.split()
-        if len(parts) >= 3 and parts[1].lower() == "x":
-            tweet = parts[2]
-            raid_start(chat_id, tweet)
+        if not is_admin(user_id):
+            tg_send(chat_id, "⛔ Admins only for /raid.", reply_to=msg_id)
             return jsonify({"ok": True})
+
         if "start" in low:
-            raid_start(chat_id, LINKS["x"])  # fallback: Projekt-X-Profil
+            MEM["raid_pending"] = True
+            MEM["raid_tweet"] = None
+            tg_send(chat_id,
+                    "RAID MODE INITIATED 🐸⚡\nPlease send the tweet link we should raid "
+                    "(https://x.com/<user>/status/<id>).")
             return jsonify({"ok": True})
+
         if "stop" in low:
-            raid_stop(chat_id)
+            MEM["raid_on"] = False
+            MEM["raid_pending"] = False
+            MEM["raid_tweet"] = None
+            tg_send(chat_id, "🧯 Raid mode off. Thanks for the energy!")
             return jsonify({"ok": True})
-        tg_send(chat_id, "Usage: /raid start | /raid stop | /raid x <tweet-url>", reply_to=msg_id)
+
+        if "status" in low:
+            tg_send(chat_id, f"Raid: on={MEM.get('raid_on')} pending={MEM.get('raid_pending')} "
+                             f"tweet={MEM.get('raid_tweet') or '-'}")
+            return jsonify({"ok": True})
+
+    # Pending: expect tweet link (only admin sets)
+    if MEM.get("raid_pending") and is_admin(user_id) and text:
+        m = TWEET_RE.search(text)
+        if m:
+            tweet_url = m.group(0)
+            MEM["raid_tweet"] = tweet_url
+            MEM["raid_pending"] = False
+            MEM["raid_on"] = True
+            raid_announce(chat_id, tweet_url, lang="en")  # English raid call
+            return jsonify({"ok": True})
+        else:
+            tg_send(chat_id, "❓ That doesn't look like a valid tweet link. "
+                             "Please send something like: https://x.com/<user>/status/<id>",
+                    reply_to=msg_id)
+            return jsonify({"ok": True})
+
+    if MEM.get("raid_pending") and not is_admin(user_id):
         return jsonify({"ok": True})
 
-    # Punkte für „done“ / Screenshots während Raid
-    if RAID.get(chat_id, {}).get("active"):
-        if "done" in low or "fertig" in low or "erledigt" in low or "liked" in low or "repost" in low:
-            award_done(chat_id, user_id or 0)
-            tg_send(chat_id, random.choice([
-                "🔥 Nice! +1 point.",
-                "🐸 Clean shill! +1.",
-                "⚡ Done & dusted — +1!"
-            ]), reply_to=msg_id, preview=False)
+    # Mini done echo during raid
+    if MEM.get("raid_on") and re.search(r"\b(done|fertig)\b", low):
+        tg_send(chat_id, "✅ noted. keep rolling!", reply_to=msg_id)
+        return jsonify({"ok": True})
 
-    # Auto-Info alle 10h oder nach 25 Chat-Events
+    # Auto info after 25 msgs
     try:
         if MEM["chat_count"] >= 25:
             tg_send(chat_id, autopost_text("en"))
@@ -512,7 +577,7 @@ def telegram_webhook():
     except Exception:
         pass
 
-    # --- Normal AI Flow ---
+    # Normal AI flow
     raw = call_openai(text, MEM["ctx"])
     if not raw:
         raw = say(lang, "Netzwerkfehler. Versuch’s nochmal 🐸", "Network glitch. Try again 🐸")
@@ -538,6 +603,7 @@ def telegram_webhook():
 # =========================
 
 if __name__ == "__main__":
+    init_db()
     port = int(os.environ.get("PORT", 10000))
     print(f"[{BOT_NAME}] starting on :{port}")
     app.run(host="0.0.0.0", port=port)
