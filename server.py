@@ -257,73 +257,7 @@ def ask():
     q = (data.get("question") or "").strip()
     if not q:
         return jsonify({"answer": "empty question"}), 200
-# ======================
-# TELEGRAM WEBHOOK
-# ======================
-@app.route("/telegram", methods=["GET", "POST"])
-def telegram_webhook():
-    # GET: Test
-    if request.method == "GET":
-        return jsonify({"ok": True, "route": "telegram"}), 200
 
-    update = request.get_json(silent=True) or {}
-    msg = update.get("message", {})
-    chat_id = msg.get("chat", {}).get("id")
-    text = (msg.get("text") or "").strip()
-    msg_id = msg.get("message_id")
-
-    if not chat_id:
-        return jsonify({"ok": True})
-
-    low = text.lower()
-
-    # ---------- Commands ----------
-    if low.startswith("/start"):
-        tg_send(chat_id,
-                "Hey there! I'm TBP-AI 🐸 Ask me anything! Use /price • /chart • /links",
-                reply_to=msg_id)
-        return jsonify({"ok": True})
-
-    if low.startswith("/links"):
-        lang = "de" if is_de(low) else "en"
-        block = build_links(lang, ["website", "buy", "contract", "pool", "telegram", "x"])
-        tg_send(chat_id, block)
-        return jsonify({"ok": True})
-
-    # ---------- Price ----------
-    if low.startswith("/price") or re.search(r"\b(preis|price|kurs|chart)\b", low, re.I):
-        p = get_live_price()
-        stats = get_market_stats() or {}
-        lines = []
-
-        if p is not None:
-            lines.append(f"💰 Price: ${p:0.12f}")
-
-        if stats.get("liquidity_usd"):
-            try:
-                lines.append(f"💧 Liquidity: ${int(float(stats['liquidity_usd'])):,}")
-            except:
-                pass
-
-        if stats.get("volume_24h"):
-            try:
-                lines.append(f"🔄 Volume 24h: ${int(float(stats['volume_24h'])):,}")
-            except:
-                pass
-
-        if stats.get("change_24h") not in (None, "", "null"):
-            lines.append(f"📈 24h: {stats['change_24h']}%")
-
-        lines.append(f"📊 Charts: {LINKS['dexscreener']}")
-
-        tg_send(chat_id, "\n".join(lines), reply_to=msg_id)
-        return jsonify({"ok": True})
-
-    # ---------- Normal chat ----------
-    ans = ai_answer(text)
-    tg_send(chat_id, ans, reply_to=msg_id)
-
-    return jsonify({"ok": True})
 
     # Preis/Stats nur bei klarer Absicht
     lang = "de" if is_de(q) else "en"
