@@ -21,7 +21,7 @@ TBP_CONTRACT = "0x50c40e03552A42fbE41b2507d522F56d7325D1F2"
 TBP_PAIR     = "0x945c73101e11cc9e529c839d1d75648d04047b0b"  # Sushi pair
 
 # Wenn du dein neues Bild im Repo hast, setze hier die RAW-URL oder hoste auf imgur.
-LOGO_URL = https://raw.githubusercontent.com/Quantumpepe/TurboPepe/main/turbopepe22.png
+LOGO_URL = "https://raw.githubusercontent.com/Quantumpepe/TurboPepe/main/turbopepe22.png"
 
 
 LINKS = {
