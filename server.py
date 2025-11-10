@@ -213,6 +213,25 @@ def root():
 @app.route("/health")
 def health():
     return jsonify({"ok": True})
+# === ADMIN: Set Webhook ===
+@app.route("/admin/set_webhook")
+def admin_set_webhook():
+    key = request.args.get("key")
+    if not key or key != os.environ.get("ADMIN_SECRET", ""):
+        return jsonify({"ok": False, "error": "unauthorized"}), 403
+
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not bot_token:
+        return jsonify({"ok": False, "error": "bot token missing"}), 500
+
+    webhook_url = "https://tbp-advisor.onrender.com/telegram"
+    r = requests.get(
+        f"https://api.telegram.org/bot{bot_token}/setWebhook",
+        params={"url": webhook_url},
+        timeout=10
+    )
+
+    return jsonify({"ok": True, "response": r.json()})
 
 @app.route("/ask", methods=["POST"])
 def ask():
