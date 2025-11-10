@@ -1,4 +1,4 @@
-# server.py — TBP-AI unified backend (Web + Telegram) — v6
+# server.py — TBP-AI unified backend (Web + Telegram) — v7
 # -*- coding: utf-8 -*-
 
 import os, re, json, time, threading, random
@@ -21,7 +21,6 @@ ADMIN_SECRET    = os.environ.get("ADMIN_SECRET", "").strip()
 TBP_CONTRACT = "0x50c40e03552A42fbE41b2507d522F56d7325D1F2"
 TBP_PAIR     = "0x945c73101e11cc9e529c839d1d75648d04047b0b"  # Sushi pair
 
-# Optionales Logo für spätere Erweiterungen
 LOGO_URL = "https://raw.githubusercontent.com/Quantumpepe/TurboPepe/main/turbopepe22.png"
 
 LINKS = {
@@ -35,7 +34,7 @@ LINKS = {
     "contract_scan":f"https://polygonscan.com/token/{TBP_CONTRACT}",
 }
 
-# Supply für grobe MC-Schätzung
+# Supply (für grobe MC-Schätzung; vorsichtig verwenden)
 MAX_SUPPLY  = 190_000_000_000
 BURNED      = 10_000_000_000
 OWNER       = 14_000_000_000
@@ -47,7 +46,8 @@ MEM = {
     "last_autopost": None,
     "chat_count": 0,
     "raid_on": False,
-    "raid_msg": "Drop a fresh TBP meme! 🐸⚡"
+    "raid_msg": "Drop a fresh TBP meme! 🐸⚡",
+    "_autopost_started": False
 }
 
 app = Flask(__name__)
@@ -57,7 +57,7 @@ CORS(app)
 # HELPERS
 # =========================
 
-WORD_PRICE = re.compile(r"\b(preis|price|kurs|chart)\b", re.I)
+WORD_PRICE = re.compile(r"\b(preis|price|kurs|chart|charts)\b", re.I)
 GER_DET    = re.compile(r"\b(der|die|das|und|nicht|warum|wie|kann|preis|kurs|listung|tokenomics)\b", re.I)
 
 def is_de(text: str) -> bool:
@@ -69,9 +69,9 @@ def say(lang, de, en):
 def tg_api(path):
     return f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{path}"
 
-def fmt_usd(x, max_digits=2):
+def fmt_usd(x, digits=2):
     try:
-        return f"${float(x):,.{max_digits}f}"
+        return f"${float(x):,.{digits}f}"
     except Exception:
         return "N/A"
 
@@ -140,11 +140,10 @@ def call_openai(question: str, context):
         return None
     messages = [{"role": "system", "content": (
         "You are TBP-AI, the official assistant of TurboPepe-AI (TBP) on Polygon.\n"
-        "Detect user language. Answer ONLY in that language (DE or EN).\n"
-        "When asked generic things (who are you, tell me about TBP, goal), keep it short and friendly.\n"
-        "No financial advice. No promises. Keep links out unless explicitly asked.\n"
+        "Detect the user's language (DE or EN) and answer ONLY in that language.\n"
+        "Be concise. Keep links out unless explicitly requested (/links or user asks for links).\n"
         "If asked about NFTs or staking: say they are planned for the future.\n"
-        "Keep humor for smalltalk but stay concise.\n"
+        "No financial advice, no promises. Keep humor lightweight.\n"
     )}]
     for item in context[-6:]:
         role = "user" if item.startswith("You:") else "assistant"
@@ -230,7 +229,7 @@ def root():
 def health():
     return jsonify({"ok": True})
 
-# Admin: Webhook setzen
+# Admin: Webhook setzen (mit HTTPS fix)
 @app.route("/admin/set_webhook")
 def admin_set_webhook():
     key = request.args.get("key", "")
@@ -239,18 +238,21 @@ def admin_set_webhook():
     if not TELEGRAM_TOKEN:
         return jsonify({"ok": False, "error": "bot token missing"}), 500
 
-    url = request.url_root.rstrip("/") + "/telegram"
+    # WICHTIG: Render kann http liefern; Telegram benötigt https → hart verdrahtet
+    url = "https://tbp-advisor.onrender.com/telegram"
+
     try:
         r = requests.get(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook",
-            params={"url": url}, timeout=10
+            params={"url": url},
+            timeout=10
         )
         j = r.json()
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
     return jsonify({"ok": True, "response": j})
 
-# Web-AI für deine Seite
+# Web-AI für die Website
 @app.route("/ask", methods=["POST"])
 def ask():
     data = request.json or {}
@@ -258,8 +260,6 @@ def ask():
     if not q:
         return jsonify({"answer": "empty question"}), 200
 
-
-    # Preis/Stats nur bei klarer Absicht
     lang = "de" if is_de(q) else "en"
     if WORD_PRICE.search(q):
         p = get_live_price()
@@ -326,18 +326,18 @@ def telegram_webhook():
     text = (msg.get("text") or "").strip()
     msg_id = msg.get("message_id")
 
-    if not chat_id:  # nothing to do
+    if not chat_id:
         return jsonify({"ok": True})
 
-    # Autopost-Thread starten (einmalig), nutze deine Gruppen-ID
+    # Autopost-Thread starten (einmalig)
     try:
-        if MEM.get("_autopost_started") != True:
+        if MEM.get("_autopost_started") is not True:
             start_autopost_background(chat_id)
             MEM["_autopost_started"] = True
     except Exception:
         pass
 
-    # Bilder → nur Englische Caption (kostenlos)
+    # Bild → englische Caption (kostenlos)
     if "photo" in msg:
         tg_send(chat_id, random.choice(MEME_CAPTIONS), reply_to=msg_id)
         MEM["chat_count"] += 1
@@ -350,7 +350,7 @@ def telegram_webhook():
     lang = "de" if is_de(text) else "en"
     MEM["chat_count"] += 1
 
-    # --- Commands ---
+    # Commands
     if low.startswith("/start"):
         tg_buttons(
             chat_id,
@@ -369,7 +369,8 @@ def telegram_webhook():
         tg_buttons(
             chat_id,
             say(lang, "Schnelle Links:", "Quick Links:"),
-            [("Sushi", LINKS["buy"]), ("Chart", LINKS["dexscreener"]), ("Scan", LINKS["contract_scan"]), ("Website", LINKS["website"])]
+            [("Sushi", LINKS["buy"]), ("Chart", LINKS["dexscreener"]),
+             ("Scan", LINKS["contract_scan"]), ("Website", LINKS["website"])]
         )
         return jsonify({"ok": True})
 
@@ -395,7 +396,8 @@ def telegram_webhook():
         return jsonify({"ok": True})
 
     if low.startswith("/chart"):
-        tg_buttons(chat_id, say(lang,"📊 Live-Chart:","📊 Live chart:"), [("DexScreener", LINKS["dexscreener"]), ("DEXTools", LINKS["dextools"])])
+        tg_buttons(chat_id, say(lang,"📊 Live-Chart:","📊 Live chart:"),
+                   [("DexScreener", LINKS["dexscreener"]), ("DEXTools", LINKS["dextools"])])
         return jsonify({"ok": True})
 
     # Simple Raid Koordination (ohne X)
@@ -410,7 +412,7 @@ def telegram_webhook():
             tg_send(chat_id, "Usage: /raid start | /raid stop")
         return jsonify({"ok": True})
 
-    # Automatische Infomeldung: alle 10h oder nach 25 Chats
+    # Autoinfo: alle 10h ODER nach 25 Chats
     try:
         if MEM["chat_count"] >= 25:
             tg_send(chat_id, autopost_text("en"))
@@ -419,13 +421,11 @@ def telegram_webhook():
     except Exception:
         pass
 
-    # --- Normal AI Flow ---
-    # Sachlich & kurz; keine Links pro Default; NFTs/Staking -> „kommt“
+    # Normal AI Flow (sachlich/kurz, keine Links per Default)
     raw = call_openai(text, MEM["ctx"])
     if not raw:
         raw = say(lang, "Netzwerkfehler. Versuch’s nochmal 🐸", "Network glitch. Try again 🐸")
 
-    # Falls Nutzer explizit Links will
     wants_links = re.search(r"\b(link|links|buy|kaufen|chart|scan)\b", low)
     if wants_links:
         tg_buttons(
