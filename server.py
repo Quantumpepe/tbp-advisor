@@ -1,4 +1,4 @@
-# server.py — TBP-AI unified backend (Web + Telegram) — v7
+# server.py — TBP-AI unified backend (Web + Telegram) — v7-fixed
 # -*- coding: utf-8 -*-
 
 import os, re, json, time, threading, random
@@ -46,11 +46,10 @@ MEM = {
     "chat_count": 0,
     "raid_on": False,
     "raid_msg": "Drop a fresh TBP meme! 🐸⚡",
-    # Neu für Throttle:
+    # Throttle:
     "resp_mode": "0",           # "0"=alles, "1"=jede 3., "2"=jede 10.
     "resp_counter": {}          # pro chat_id Zähler
 }
-
 
 # Raid-State pro Chat
 RAID = {}  # chat_id -> {"active": bool, "await_link": bool, "tweet_url": str}
@@ -85,7 +84,7 @@ def fmt_usd(x, max_digits=2):
 
 def is_admin(user_id) -> bool:
     try:
-        return str(user_id) in ADMIN_USER_IDS if ADMIN_USER_IDS else True  # wenn keine ENV gesetzt: alle dürfen
+        return str(user_id) in ADMIN_USER_IDS if ADMIN_USER_IDS else True  # ohne ENV dürfen alle (zum Testen)
     except Exception:
         return False
 
@@ -97,16 +96,13 @@ def should_reply(chat_id: int) -> bool:
     mode = MEM.get("resp_mode", "0")
     if mode == "0":
         return True
-    # counter pro chat
     cnt = MEM["resp_counter"].get(chat_id, 0) + 1
     MEM["resp_counter"][chat_id] = cnt
-
     if mode == "1":
         return (cnt % 3) == 0
     if mode == "2":
         return (cnt % 10) == 0
     return True
-
 
 # -------------------------
 # Market Data
@@ -246,9 +242,8 @@ def start_autopost_background(chat_id: int):
                     MEM["last_autopost"] = datetime.utcnow()
             except Exception:
                 pass
-            time.sleep(60)  # check minütlich
-    t = threading.Thread(target=loop, daemon=True)
-    t.start()
+            time.sleep(60)
+    threading.Thread(target=loop, daemon=True).start()
 
 # =========================
 # FLASK WEB (health/ask/admin)
@@ -271,7 +266,6 @@ def admin_set_webhook():
     if not TELEGRAM_TOKEN:
         return jsonify({"ok": False, "error": "bot token missing"}), 500
 
-    # sichere https-URL bauen
     root = request.url_root.replace("http://", "https://")
     url = root.rstrip("/") + "/telegram"
 
@@ -351,46 +345,19 @@ MEME_CAPTIONS = [
 
 @app.route("/telegram", methods=["GET","POST"])
 def telegram_webhook():
-    # GET → sichtbar, hilft beim Debuggen, zeigt nur Route an
+    # GET → sichtbar, hilft beim Debuggen
     if request.method == "GET":
         return jsonify({"ok": True, "route": "telegram"}), 200
-        # --- Admin-Response-Rate /0 /1 /2 /mode ---
-    # /0: alles, /1: jede 3., /2: jede 10., /mode: anzeigen
-    if low.startswith("/0") or low.startswith("/1") or low.startswith("/2") or low.startswith("/mode"):
-        from_user = (msg.get("from", {}) or {}).get("id")
-        if low.startswith("/mode"):
-            mode_label = {"0":"all", "1":"every 3rd", "2":"every 10th"}.get(MEM.get("resp_mode","0"), "all")
-            tg_send(chat_id, f"Current reply mode: {mode_label}", reply_to=msg_id, preview=False)
-            return jsonify({"ok": True})
 
-        if not is_admin(from_user):
-            tg_send(chat_id, "Only admins can change reply mode.", reply_to=msg_id, preview=False)
-            return jsonify({"ok": True})
-
-        if low.startswith("/0"):
-            MEM["resp_mode"] = "0"
-            MEM["resp_counter"][chat_id] = 0
-            tg_send(chat_id, "Reply mode set to: ALL (respond to every message).", reply_to=msg_id, preview=False)
-            return jsonify({"ok": True})
-        if low.startswith("/1"):
-            MEM["resp_mode"] = "1"
-            MEM["resp_counter"][chat_id] = 0
-            tg_send(chat_id, "Reply mode set to: EVERY 3rd message.", reply_to=msg_id, preview=False)
-            return jsonify({"ok": True})
-        if low.startswith("/2"):
-            MEM["resp_mode"] = "2"
-            MEM["resp_counter"][chat_id] = 0
-            tg_send(chat_id, "Reply mode set to: EVERY 10th message.", reply_to=msg_id, preview=False)
-            return jsonify({"ok": True})
-
-    update = request.json or {}
-    msg = update.get("message", {}) or {}
-    chat = msg.get("chat", {}) or {}
+    # ---- Update parsen ----
+    update  = request.json or {}
+    msg     = update.get("message", {}) or {}
+    chat    = msg.get("chat", {}) or {}
     chat_id = chat.get("id")
     from_user = msg.get("from", {}) or {}
-    user_id = from_user.get("id")
-    text = (msg.get("text") or "").strip()
-    msg_id = msg.get("message_id")
+    user_id   = from_user.get("id")
+    text    = (msg.get("text") or "").strip()
+    msg_id  = msg.get("message_id")
 
     if not chat_id:
         return jsonify({"ok": True})
@@ -412,9 +379,34 @@ def telegram_webhook():
     if not text:
         return jsonify({"ok": True})
 
-    low = text.lower()
+    low  = text.lower()
     lang = "de" if is_de(text) else "en"
     MEM["chat_count"] += 1
+
+    # ---- Admin-Response-Rate /0 /1 /2 /mode  (JETZT korrekt platziert) ----
+    if low.startswith("/0") or low.startswith("/1") or low.startswith("/2") or low.startswith("/mode"):
+        if low.startswith("/mode"):
+            mode_label = {"0":"all", "1":"every 3rd", "2":"every 10th"}.get(MEM.get("resp_mode","0"), "all")
+            tg_send(chat_id, f"Current reply mode: {mode_label}", reply_to=msg_id, preview=False)
+            return jsonify({"ok": True})
+        if not is_admin(user_id):
+            tg_send(chat_id, "Only admins can change reply mode.", reply_to=msg_id, preview=False)
+            return jsonify({"ok": True})
+        if low.startswith("/0"):
+            MEM["resp_mode"] = "0"
+            MEM["resp_counter"][chat_id] = 0
+            tg_send(chat_id, "Reply mode set to: ALL (respond to every message).", reply_to=msg_id, preview=False)
+            return jsonify({"ok": True})
+        if low.startswith("/1"):
+            MEM["resp_mode"] = "1"
+            MEM["resp_counter"][chat_id] = 0
+            tg_send(chat_id, "Reply mode set to: EVERY 3rd message.", reply_to=msg_id, preview=False)
+            return jsonify({"ok": True})
+        if low.startswith("/2"):
+            MEM["resp_mode"] = "2"
+            MEM["resp_counter"][chat_id] = 0
+            tg_send(chat_id, "Reply mode set to: EVERY 10th message.", reply_to=msg_id, preview=False)
+            return jsonify({"ok": True})
 
     # ----- Commands -----
     if low.startswith("/start"):
@@ -469,7 +461,7 @@ def telegram_webhook():
         parts = low.split()
         sub = parts[1] if len(parts) > 1 else ""
 
-        if not is_admin(int(user_id or 0)):
+        if not is_admin(user_id):
             tg_send(chat_id, "⛔ Only admins can start/stop raids.", reply_to=msg_id)
             return jsonify({"ok": True})
 
@@ -513,14 +505,12 @@ def telegram_webhook():
             [("Open Tweet", url), ("Chart", LINKS["dexscreener"]), ("Sushi", LINKS["buy"])]
         )
 
-        # Erinnerung nach 5 Minuten
         def remind():
             time.sleep(300)
             if RAID.get(chat_id, {}).get("active"):
                 tg_buttons(chat_id, "⚡ RAID REMINDER\nLike • Repost • Comment → then write **done** here.",
                            [("Open Tweet", url)])
         threading.Thread(target=remind, daemon=True).start()
-
         return jsonify({"ok": True})
 
     # Teilnehmer melden "done"
@@ -536,11 +526,10 @@ def telegram_webhook():
             MEM["last_autopost"] = datetime.utcnow()
     except Exception:
         pass
-    # --- Throttle: nur normale Chat-Antworten regulieren, Commands bleiben immer durch ---
-    if not low.startswith("/"):   # nur freie Nachrichten drosseln
+
+    # --- Throttle: nur freie Nachrichten drosseln (Commands immer zulassen) ---
+    if not low.startswith("/"):
         if not should_reply(chat_id):
-            # Optional: kleine Reaktion statt Antwort
-            # tg_send(chat_id, "👀", reply_to=msg_id, preview=False)
             return jsonify({"ok": True})
 
     # --- Normal AI Flow ---
