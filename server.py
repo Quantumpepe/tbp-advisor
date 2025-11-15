@@ -372,23 +372,33 @@ def autopost_text(lang="en"):
     change = stats.get("change_24h")
     liq   = stats.get("liquidity_usd")
     vol   = stats.get("volume_24h")
+
+    # Zeilen einzeln bauen (übersichtlicher, weniger Fehlergefahr)
+    line_price = say(lang, "Preis", "Price") + f": {fmt_usd(p, 12) if p else 'N/A'}"
+    line_24h   = "24h: " + (f"{change}%" if change not in (None, "", "null") else "N/A")
+    line_liq   = say(lang, "Liquidität", "Liquidity") + f": {fmt_usd(liq) if liq else 'N/A'}"
+    line_vol   = "Vol 24h: " + (fmt_usd(vol) if vol else "N/A")
+
     lines = [
         say(lang, "🔔 TBP Update:", "🔔 TBP Update:"),
-        say(lang, "Preis", "Price") + f": {fmt_usd(p, 12) if p else 'N/A'}",
-        "24h: " + (f"{change}%" if change not in (None, "", "null") else "N/A"),
-        say(lang, "Liquidität", "Liquidity") + f": {fmt_usd(liq) if liq else 'N/A'}",
-        "Vol 24h": + (fmt_usd(vol) if vol else "N/A")
+        line_price,
+        line_24h,
+        line_liq,
+        line_vol,
         "",
-        say(lang,
+        say(
+            lang,
             "Was ist TBP? Meme-Token auf Polygon, echte AI-Antworten, 0% Tax, LP geburnt. Ziel: Community & Transparenz.",
             "What is TBP? Meme token on Polygon, real AI replies, 0% tax, LP burned. Goal: community & transparency."
         ),
         "",
         f"• Sushi: {LINKS['buy']}",
         f"• Chart: {LINKS['dexscreener']}",
-        f"• Scan:  {LINKS['contract_scan']}"
+        f"• Scan:  {LINKS['contract_scan']}",
     ]
+
     return "\n".join(lines)
+
 
 def start_autopost_background(chat_id):
     def loop():
