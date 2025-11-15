@@ -213,7 +213,7 @@ def get_live_price():
     # 2) Dexscreener
     try:
         r = requests.get(
-           f"https://api.dexscreener.com/latest/dex/pairs/polygon/{TBP_PAIR}",
+            f"https://api.dexscreener.com/latest/dex/pairs/polygon/{TBP_PAIR}",
             timeout=6
         )
         r.raise_for_status()
@@ -259,13 +259,26 @@ def call_openai(question: str, context, mode: str = "tbp"):
         return None
 
     if mode == "cboost":
+        # ► hier ist jetzt die erweiterte C-Boost Persönlichkeit
         system_msg = (
             "You are C-BoostAI, the official assistant of the C-Boost micro supply token on Polygon.\n"
-            "Detect user language (German or English) and always answer in the user's language.\n"
-            "Explain only C-Boost when users ask about 'C-Boost', 'CBoost', 'C-Boost Token' etc.\n"
-            "Never mix C-Boost with TurboPepe or TBP. If someone asks about TBP, say you are only "
-            "responsible for C-Boost and they should ask the TBP bot in the TBP group.\n"
-            "Be short, friendly and clear, no financial advice."
+            "Core facts:\n"
+            "- C-Boost is a next-generation MICRO SUPPLY token on Polygon with a total supply of 5,000,000 tokens.\n"
+            "- Fair launch mechanics, no complex taxes, transparent supply.\n"
+            "- Focus on:\n"
+            "  • small supply + strong community\n"
+            "  • Boost Raids on X/Twitter and social engagement\n"
+            "  • AI-assisted marketing and meme creation in the future\n"
+            "- Long-term vision: build an ecosystem where C-Boost acts as the 'energy token' for raids, community quests, "
+            "and future utilities like whitelists, rewards, and possible tools.\n"
+            "\n"
+            "Style & rules:\n"
+            "- First, detect the user's language (German or English) and ALWAYS answer only in that language.\n"
+            "- When users ask \"what is C-Boost\" or \"future\" or \"utility\", explain the above clearly and simply.\n"
+            "- Make it clear that C-Boost is NOT financial advice, just an experimental community project.\n"
+            "- Never mix C-Boost with TurboPepe or TBP. If someone asks about TBP, say you are only responsible for C-Boost "
+            "and they should ask the TBP bot in the TBP group.\n"
+            "- Keep answers short, friendly, and a bit hyped, but do not overpromise.\n"
         )
     else:
         system_msg = (
@@ -428,10 +441,17 @@ def ask():
 # TELEGRAM
 # =========================
 
-MEME_CAPTIONS = [
-    "Nice photo! Want me to spin a meme from it? 🐸✨",
-    "Fresh pixels detected. Should I add meme power? ⚡",
+# Unterschiedliche Bild-Reaktionen für TBP & C-Boost
+MEME_CAPTIONS_TBP = [
+    "Nice photo! Want me to spin a TBP meme from it? 🐸✨",
+    "Fresh pixels detected. Should I add TurboPepe energy? ⚡",
     "Clean drop. Caption it, or shall I? 😎",
+]
+
+MEME_CAPTIONS_CBOOST = [
+    "Boost-worthy image detected. Shall we turn this into a C-Boost meme? ⚡",
+    "Nice pic! Let's boost the timeline with it. 🚀",
+    "C-Boost mode: ON. Need a spicy caption? 😏",
 ]
 
 @app.route("/telegram", methods=["GET","POST"])
@@ -461,9 +481,13 @@ def telegram_webhook():
     except Exception:
         pass
 
-    # Foto → nur englische Caption (kostenlos)
+    # Foto → hier jetzt mit getrennten Caption-Listen
     if "photo" in msg:
-        tg_send(chat_id, random.choice(MEME_CAPTIONS), reply_to=msg_id)
+        if CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID:
+            caption = random.choice(MEME_CAPTIONS_CBOOST)
+        else:
+            caption = random.choice(MEME_CAPTIONS_TBP)
+        tg_send(chat_id, caption, reply_to=msg_id)
         MEM["chat_count"] += 1
         return jsonify({"ok": True})
 
@@ -507,8 +531,8 @@ def telegram_webhook():
                 chat_id,
                 say(
                     lang,
-                    "Hi, ich bin C-BoostAI 🤖 – frag mich alles zu C-Boost. Keine Finanzberatung.",
-                    "Hi, I'm C-BoostAI 🤖 – ask me anything about C-Boost. No financial advice."
+                    "Hi, ich bin C-BoostAI 🤖 – dein Assistent für den C-Boost Micro Supply Token auf Polygon. Frag mich alles rund um Vision, Utility und Zukunft. Keine Finanzberatung.",
+                    "Hi, I'm C-BoostAI 🤖 – your assistant for the C-Boost micro supply token on Polygon. Ask me anything about vision, utility and future plans. No financial advice."
                 ),
                 reply_to=msg_id
             )
@@ -541,8 +565,8 @@ def telegram_webhook():
             tg_send(
                 chat_id,
                 say(lang,
-                    "C-Boost-Links folgen, sobald der Launch live ist. 🚀",
-                    "C-Boost links will follow once launch is live. 🚀"
+                    "C-Boost-Links (Charts, DEX, Contract) werden zum Launch bekanntgegeben. 🚀",
+                    "C-Boost links (charts, DEX, contract) will be announced at launch. 🚀"
                 ),
                 reply_to=msg_id
             )
@@ -561,8 +585,8 @@ def telegram_webhook():
             tg_send(
                 chat_id,
                 say(lang,
-                    "Für C-Boost gibt es noch keinen Live-Preis – der Launch steht noch bevor.",
-                    "There is no live price for C-Boost yet – launch is still upcoming."
+                    "Für C-Boost gibt es noch keinen Live-Preis – der Launch steht noch bevor. Fokus aktuell: Aufbau der Community und Boost-Raids.",
+                    "There is no live price for C-Boost yet – launch is still upcoming. Focus for now: building the community and boost raids.",
                 ),
                 reply_to=msg_id
             )
@@ -584,8 +608,8 @@ def telegram_webhook():
             tg_send(
                 chat_id,
                 say(lang,
-                    "C-Boost ist noch im Aufbau – es gibt noch keine offiziellen Stats.",
-                    "C-Boost is still in preparation – no official stats yet."
+                    "C-Boost ist noch im Aufbau – offizielle On-Chain-Stats folgen ab Launch. Bis dahin steht die Community- und Raid-Power im Fokus.",
+                    "C-Boost is still in preparation – official on-chain stats will follow after launch. Until then, focus is on community and raid power.",
                 ),
                 reply_to=msg_id
             )
@@ -604,8 +628,8 @@ def telegram_webhook():
             tg_send(
                 chat_id,
                 say(lang,
-                    "C-Boost-Chart folgt nach dem Launch.",
-                    "C-Boost chart will be available after launch."
+                    "Der C-Boost-Chart wird nach dem Launch verlinkt. Bis dahin: Memes, Raids und Community-Aufbau. ⚡",
+                    "C-Boost chart will be linked after launch. Until then: memes, raids and community building. ⚡",
                 ),
                 reply_to=msg_id
             )
@@ -614,7 +638,7 @@ def telegram_webhook():
         tg_buttons(chat_id, say(lang,"📊 Live-Chart:","📊 Live chart:"), [("DexScreener", LINKS["dexscreener"]), ("DEXTools", LINKS["dextools"])])
         return jsonify({"ok": True})
 
-    # ----- RAID FLOW ----- (TBP-spezifische Links – in C-Boost aktuell besser nicht nutzen)
+    # ----- RAID FLOW ----- (TBP-spezifische Links – in C-Boost aktuell trotzdem nutzbar, nur Text ist generisch)
     if low.startswith("/raid"):
         parts = low.split()
         sub = parts[1] if len(parts) > 1 else ""
@@ -657,10 +681,11 @@ def telegram_webhook():
         st["await_link"] = False
         st["active"] = True
 
+        # Buttons bleiben generisch (funktionieren in TBP & C-Boost)
         tg_buttons(
             chat_id,
             "🐸 RAID MODE ON!\nOpen the tweet, then **Like + Repost + Comment**.\nReply here with **done** or drop a screenshot. Let’s pump the vibes! 🚀",
-            [("Open Tweet", url), ("Chart", LINKS["dexscreener"]), ("Sushi", LINKS["buy"])]
+            [("Open Tweet", url)]
         )
 
         def remind():
