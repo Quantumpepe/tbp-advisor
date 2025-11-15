@@ -377,7 +377,7 @@ def autopost_text(lang="en"):
         say(lang, "Preis", "Price") + f": {fmt_usd(p, 12) if p else 'N/A'}",
         "24h: " + (f"{change}%" if change not in (None, "", "null") else "N/A"),
         say(lang, "Liquidität", "Liquidity") + f": {fmt_usd(liq) if liq else 'N/A'}",
-        "Vol 24h": + (fmt_usd(vol) if vol else "N/A"),
+        "Vol 24h": + (fmt_usd(vol) if vol else "N/A")
         "",
         say(lang,
             "Was ist TBP? Meme-Token auf Polygon, echte AI-Antworten, 0% Tax, LP geburnt. Ziel: Community & Transparenz.",
