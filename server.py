@@ -122,6 +122,31 @@ def _choose_token_for_chat(chat_id: int) -> str:
     return TELEGRAM_TOKEN_TBP
 
 
+def tg_send_any(chat_id, text, reply_to=None, preview=True):
+    """
+    Sende eine Nachricht mit ALLEN konfigurierten Bot-Tokens.
+    So funktioniert /id auch, bevor CBOOST_CHAT_ID gesetzt ist.
+    """
+    tokens = [t for t in (TELEGRAM_TOKEN_TBP, TELEGRAM_TOKEN_CBOOST) if t]
+    for token in tokens:
+        try:
+            payload = {
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": not preview,
+            }
+            if reply_to:
+                payload["reply_to_message_id"] = reply_to
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json=payload,
+                timeout=10,
+            )
+        except Exception:
+            continue
+
+
 def tg_send(chat_id, text, reply_to=None, preview=True):
     token = _choose_token_for_chat(chat_id)
     if not token:
@@ -188,7 +213,7 @@ def get_live_price():
     # 2) Dexscreener
     try:
         r = requests.get(
-            f"https://api.dexscreener.com/latest/dex/pairs/polygon/{TBP_PAIR}",
+           f"https://api.dexscreener.com/latest/dex/pairs/polygon/{TBP_PAIR}",
             timeout=6
         )
         r.raise_for_status()
@@ -506,7 +531,8 @@ def telegram_webhook():
 
     # Chat-ID anzeigen (für CBOOST_CHAT_ID wichtig)
     if low.startswith("/id"):
-        tg_send(chat_id, f"Chat ID: <code>{chat_id}</code>", reply_to=msg_id, preview=False)
+        # Wichtig: hier tg_send_any nutzen, damit TBP- und CBoost-Bot beide antworten können
+        tg_send_any(chat_id, f"Chat ID: <code>{chat_id}</code>", reply_to=msg_id, preview=False)
         return jsonify({"ok": True})
 
     if low.startswith("/links"):
