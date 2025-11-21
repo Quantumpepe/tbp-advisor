@@ -1,9 +1,8 @@
-# server.py — TBP-AI + C-BoostAI unified backend (Web + Telegram) — dual-token version
+# server.py — TBP-AI + C-BoostAI unified backend (Web + Telegram) — secure version
 # -*- coding: utf-8 -*-
 
 import os, re, json, time, threading, random
 from datetime import datetime, timedelta
-from collections import defaultdict
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -43,9 +42,6 @@ LINKS = {
     "contract_scan":f"https://polygonscan.com/token/{TBP_CONTRACT}",
 }
 
-# Nur diese Links sind im Chat erlaubt – alles andere gilt als Fremdwerbung
-ALLOWED_LINK_PREFIXES = list(LINKS.values())
-
 # TBP Supply für grobe MC-Schätzung (nur Info, nicht kritisch)
 MAX_SUPPLY  = 190_000_000_000
 BURNED      = 10_000_000_000
@@ -71,32 +67,29 @@ RAID = {}  # chat_id -> {"active": bool, "await_link": bool, "tweet_url": str}
 WORD_PRICE = re.compile(r"\b(preis|price|kurs|chart|charts)\b", re.I)
 GER_DET    = re.compile(r"\b(der|die|das|und|nicht|warum|wie|kann|preis|kurs|listung|tokenomics)\b", re.I)
 TWEET_RE   = re.compile(r"https?://(x\.com|twitter\.com)/\S+", re.I)
-URL_RE     = re.compile(r"https?://\S+", re.I)
 
-# Anti-Scam / Anti-Promo Patterns
-SCAM_PATTERNS = [
-    r"fast[-\s]?track.*cmc",
-    r"fast[-\s]?track.*listing",
-    r"i can get you listed",
-    r"i can list your token",
-    r"i work(ed)? with top projects",
-    r"send.*fee",
-    r"pay.*fee",
-    r"listing.*fee",
-    r"cmc agent",
-    r"verify.*token",
-    r"priority listing",
-    r"guarantee.*cmc",
-    r"marketing team",
-    r"promotion service",
-    r"signal group",
-    r"pump group",
-    r"bring investors",
-    r"we can promote",
+# --- Security Keyword Sets ---
+
+LISTING_SCAM_KW = [
+    "pay me for listing", "pay for fast listing", "fast listing", "fast-track listing",
+    "cmc listing", "coinmarketcap listing", "coingecko listing", "cg listing",
+    "i work with coinmarketcap", "i'm from coinmarketcap", "i am from coinmarketcap",
+    "listing manager", "list your token", "guarantee listing"
 ]
 
-PERMA_MUTE = set()              # dauerhaft stumm geschaltete User
-SCAM_COUNT = defaultdict(int)   # user_id -> Anzahl Verstöße
+SERVICE_PROMO_KW = [
+    "animator", "animation", "video editor", "logo designer", "graphic designer",
+    "marketing manager", "promotion", "promotions", "promote your token",
+    "promote your project", "shiller", "shilling", "call group", "cmc trending",
+    "dexscreener trending", "influencer", "content creator", "copywriter",
+    "telegram promotions", "telegram marketing"
+]
+
+OTHER_PROJECT_PHRASES = [
+    "join my new token", "join my token", "join my project", "join my group",
+    "new gem", "next 100x", "airdrop", "presale live", "fairlaunch",
+    "launching now", "softcap", "hardcap", "buy now", "dm for deal"
+]
 
 # App
 app = Flask(__name__)
@@ -125,6 +118,10 @@ def is_admin(user_id) -> bool:
         return False
 
 def should_reply(chat_id: int) -> bool:
+    """
+    Entscheidet anhand von MEM['resp_mode'], ob die AI antworten soll.
+    '0' -> immer; '1' -> jede 3.; '2' -> jede 10.
+    """
     mode = MEM.get("resp_mode", "0")
     if mode == "0":
         return True
@@ -138,12 +135,21 @@ def should_reply(chat_id: int) -> bool:
 
 
 def _choose_token_for_chat(chat_id: int) -> str:
+    """
+    Wählt den richtigen Bot-Token je nach Chat.
+    - CBOOST_CHAT_ID -> C-Boost-Bot
+    - sonst TBP-Bot
+    """
     if CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID and TELEGRAM_TOKEN_CBOOST:
         return TELEGRAM_TOKEN_CBOOST
     return TELEGRAM_TOKEN_TBP
 
 
 def tg_send_any(chat_id, text, reply_to=None, preview=True):
+    """
+    Sende eine Nachricht mit ALLEN konfigurierten Bot-Tokens.
+    So funktioniert /id auch, bevor CBOOST_CHAT_ID gesetzt ist.
+    """
     tokens = [t for t in (TELEGRAM_TOKEN_TBP, TELEGRAM_TOKEN_CBOOST) if t]
     for token in tokens:
         try:
@@ -198,6 +204,7 @@ def tg_buttons(chat_id, text, buttons):
                 "chat_id": chat_id,
                 "text": text,
                 "reply_markup": kb,
+                "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             },
             timeout=10,
@@ -206,43 +213,82 @@ def tg_buttons(chat_id, text, buttons):
         pass
 
 
-def is_scam_message(text: str) -> bool:
-    if not text:
-        return False
-    t = text.lower()
-    if "coinmarketcap" in t and ("fee" in t or "fast track" in t or "pay" in t):
-        return True
-    if "promotion" in t and "service" in t:
-        return True
-    if "investors" in t and "bring" in t:
-        return True
-    for p in SCAM_PATTERNS:
-        if re.search(p, t):
-            return True
-    return False
+def tg_delete(chat_id, message_id):
+    token = _choose_token_for_chat(chat_id)
+    if not token:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/deleteMessage",
+            json={"chat_id": chat_id, "message_id": message_id},
+            timeout=10,
+        )
+    except Exception:
+        pass
 
 
-def is_external_promo(text: str) -> bool:
-    if not text:
-        return False
-    urls = URL_RE.findall(text)
-    if not urls:
-        return False
-    for u in urls:
-        allowed = False
-        for pref in ALLOWED_LINK_PREFIXES:
-            if u.startswith(pref):
-                allowed = True
-                break
-        if not allowed:
-            return True
-    return False
+def format_mention(user: dict) -> str:
+    """HTML-Mention für Welcome-Message."""
+    uid = user.get("id")
+    name_parts = []
+    if user.get("first_name"):
+        name_parts.append(user["first_name"])
+    if user.get("last_name"):
+        name_parts.append(user["last_name"])
+    name = " ".join(name_parts).strip() or user.get("username") or "friend"
+    if uid:
+        return f'<a href="tg://user?id={uid}">{name}</a>'
+    return name
+
+
+def detect_suspicious_message(text: str) -> str | None:
+    """
+    Erkenne Scam / Promo / Service-Werbung.
+    Rückgabe:
+      "listing"  -> bezahlte CMC/CG-Listing-Angebote
+      "service"  -> Animations-/Marketing-/Promo-Service
+      "promo"    -> Werbung für andere Token / Gruppen / Presales
+      None       -> alles okay
+    """
+    t = (text or "").lower()
+    if not t:
+        return None
+
+    # Listing-Scam
+    for kw in LISTING_SCAM_KW:
+        if kw in t:
+            return "listing"
+
+    # Service-Promo (Animator, Marketing, etc.)
+    for kw in SERVICE_PROMO_KW:
+        if kw in t:
+            # ein bisschen härter, wenn zugleich "i can" / "i will" usw.
+            if "i can" in t or "i will" in t or "i help" in t or "let's work" in t or "let us work" in t:
+                return "service"
+            return "service"
+
+    # Werbung für andere Projekte / Gruppen
+    for kw in OTHER_PROJECT_PHRASES:
+        if kw in t:
+            return "promo"
+
+    # Fremde TG-Links
+    if "t.me/" in t and "turbopepe25" not in t and "c-boost" not in t:
+        return "promo"
+
+    # Fremde Contracts + Marketing-Wörter
+    if "0x" in t and ("buy" in t or "launch" in t or "presale" in t):
+        return "promo"
+
+    return None
+
 
 # -------------------------
 # Market Data (TBP)
 # -------------------------
 
 def get_live_price():
+    # 1) GeckoTerminal
     try:
         r = requests.get(
             f"https://api.geckoterminal.com/api/v2/networks/polygon_pos/pools/{TBP_PAIR}",
@@ -258,6 +304,7 @@ def get_live_price():
                 return p
     except Exception:
         pass
+    # 2) Dexscreener
     try:
         r = requests.get(
             f"https://api.dexscreener.com/latest/dex/pairs/polygon/{TBP_PAIR}",
@@ -293,15 +340,20 @@ def get_market_stats():
     except Exception:
         return None
 
+
 # -------------------------
 # OpenAI (optional)
 # -------------------------
 
 def call_openai(question: str, context, mode: str = "tbp"):
+    """
+    mode = "tbp" oder "cboost"
+    """
     if not OPENAI_API_KEY:
         return None
 
     if mode == "cboost":
+        # ► C-Boost Persönlichkeit
         system_msg = (
             "You are C-BoostAI, the official assistant of the C-Boost micro supply token on Polygon.\n"
             "Core facts:\n"
@@ -396,6 +448,7 @@ def autopost_text(lang="en"):
 
 
 def start_autopost_background(chat_id: int):
+    # Autopost nur für TBP-Chat, NICHT für C-Boost
     if CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID:
         return
 
@@ -423,6 +476,7 @@ def root():
 def health():
     return jsonify({"ok": True})
 
+# Admin: Webhook setzen
 @app.route("/admin/set_webhook")
 def admin_set_webhook():
     key = request.args.get("key", "")
@@ -450,6 +504,7 @@ def admin_set_webhook():
 
     return jsonify({"ok": True, "responses": results})
 
+# Web-AI für deine TBP-Webseite
 @app.route("/ask", methods=["POST"])
 def ask():
     data = request.json or {}
@@ -476,6 +531,8 @@ def ask():
     MEM["ctx"] = MEM["ctx"][-10:]
     return jsonify({"answer": ans})
 
+
+# Web-AI für die C-Boost Website
 @app.route("/ask_cboost", methods=["POST"])
 def ask_cboost():
     data = request.json or {}
@@ -495,6 +552,7 @@ def ask_cboost():
 # TELEGRAM
 # =========================
 
+# Unterschiedliche Bild-Reaktionen für TBP & C-Boost
 MEME_CAPTIONS_TBP = [
     "Nice photo! Want me to spin a TBP meme from it? 🐸✨",
     "Fresh pixels detected. Should I add TurboPepe energy? ⚡",
@@ -509,143 +567,24 @@ MEME_CAPTIONS_CBOOST = [
 
 @app.route("/telegram", methods=["GET","POST"])
 def telegram_webhook():
+    # GET → sichtbar, hilft beim Debuggen
     if request.method == "GET":
         return jsonify({"ok": True, "route": "telegram"}), 200
 
+    # ---- Update parsen ----
     update  = request.json or {}
     msg     = update.get("message", {}) or {}
     chat    = msg.get("chat", {}) or {}
     chat_id = chat.get("id")
     from_user = msg.get("from", {}) or {}
     user_id   = from_user.get("id")
-    text    = (msg.get("text") or msg.get("caption") or "").strip()
+    text    = (msg.get("text") or "").strip()
     msg_id  = msg.get("message_id")
-
-    # === Welcome Message bei neuen Membern (mit Namen) ===
-    if chat_id and msg.get("new_chat_members"):
-        for member in msg.get("new_chat_members", []):
-            # Bots nicht extra begrüßen
-            if member.get("is_bot"):
-                continue
-
-            first = member.get("first_name") or ""
-            last  = member.get("last_name") or ""
-            username = member.get("username")
-
-            display_name = (first + " " + last).strip()
-            if not display_name:
-                if username:
-                    display_name = f"@{username}"
-                else:
-                    display_name = "friend"
-
-            if CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID:
-                welcome = (
-                    f"👋 Welcome <b>{display_name}</b> to the official <b>C-Boost</b> community!\n\n"
-                    "This chat is protected by an AI-based security system.\n"
-                    "• No paid listing / CMC offers\n"
-                    "• No promotion of other tokens / groups\n"
-                    "• Focus: C-Boost, raids & community 🚀\n\n"
-                    "Use <code>/rules</code> to see all security rules."
-                )
-            else:
-                welcome = (
-                    f"👋 Welcome <b>{display_name}</b> to the official <b>TurboPepe-AI (TBP)</b> community!\n\n"
-                    "This chat is protected by an AI-based security system:\n"
-                    "• No paid CoinMarketCap / listing offers\n"
-                    "• No promotion of other tokens / projects / groups\n"
-                    "• Only official TBP links (website, Sushi, charts, scan, TG, X)\n\n"
-                    "Use <code>/rules</code> to see all security rules.\n"
-                    "Willkommen! /rules zeigt dir die Sicherheitsregeln auch auf Deutsch 🐸"
-                )
-
-            tg_send(chat_id, welcome, reply_to=msg_id, preview=False)
-
-        return jsonify({"ok": True})
-
-    # ==============================
-    # ANTI-SCAM / ANTI-PROMO SHIELD
-    # ==============================
-    if chat_id and user_id and text:
-        if not is_admin(user_id):
-            if user_id in PERMA_MUTE:
-                token = _choose_token_for_chat(chat_id)
-                if token:
-                    try:
-                        requests.post(
-                            f"https://api.telegram.org/bot{token}/deleteMessage",
-                            json={"chat_id": chat_id, "message_id": msg_id},
-                            timeout=10
-                        )
-                    except Exception:
-                        pass
-                return jsonify({"ok": True})
-
-            scam_flag = is_scam_message(text)
-            promo_flag = is_external_promo(text)
-
-            if scam_flag or promo_flag:
-                token = _choose_token_for_chat(chat_id)
-                if token:
-                    try:
-                        requests.post(
-                            f"https://api.telegram.org/bot{token}/deleteMessage",
-                            json={"chat_id": chat_id, "message_id": msg_id},
-                            timeout=10
-                        )
-                    except Exception:
-                        pass
-
-                SCAM_COUNT[user_id] += 1
-
-                if SCAM_COUNT[user_id] == 1:
-                    if scam_flag:
-                        reason = (
-                            "It matches known CoinMarketCap / listing scam patterns.\n"
-                            "CoinMarketCap does NOT fast-track listings via Telegram or private agents."
-                        )
-                    else:
-                        reason = (
-                            "It contains external links to other tokens / projects.\n"
-                            "This group is reserved for TurboPepe-AI (TBP) only."
-                        )
-
-                    warning = (
-                        "⚠️ <b>TurboPepe-AI Security Notice</b>\n"
-                        "A message was removed by the AI security filter.\n"
-                        f"{reason}\n"
-                        "Unsolicited promotion / listing offers are not allowed here.\n"
-                        "This is your only warning."
-                    )
-                    tg_send(chat_id, warning, preview=False)
-                    return jsonify({"ok": True})
-
-                if SCAM_COUNT[user_id] >= 2 and token:
-                    PERMA_MUTE.add(user_id)
-                    try:
-                        requests.post(
-                            f"https://api.telegram.org/bot{token}/restrictChatMember",
-                            json={
-                                "chat_id": chat_id,
-                                "user_id": user_id,
-                                "permissions": {"can_send_messages": False}
-                            },
-                            timeout=10
-                        )
-                    except Exception:
-                        pass
-
-                    muted_msg = (
-                        "🚫 <b>User permanently muted</b>\n"
-                        "Repeated suspected listing / scam / external promo behavior detected.\n"
-                        "TurboPepe-AI security has restricted this user."
-                    )
-                    tg_send(chat_id, muted_msg, preview=False)
-                    return jsonify({"ok": True})
 
     if not chat_id:
         return jsonify({"ok": True})
 
+    # Autopost-Thread einmalig starten (nur für TBP-Chat)
     try:
         if MEM.get("_autopost_started") != True and (not CBOOST_CHAT_ID or chat_id != CBOOST_CHAT_ID):
             start_autopost_background(chat_id)
@@ -653,6 +592,30 @@ def telegram_webhook():
     except Exception:
         pass
 
+    # Welcome für neue Member (mit Name)
+    if "new_chat_members" in msg:
+        members = msg.get("new_chat_members") or []
+        for u in members:
+            mention = format_mention(u)
+            lang = "de"  # Mischtext DE/EN
+            if CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID:
+                welcome = (
+                    f"👋 Welcome {mention} to the C-Boost community!\n"
+                    "This chat is protected by an AI-based security system.\n"
+                    "Use /rules to see all safety rules. ⚡"
+                )
+            else:
+                welcome = (
+                    f"👋 Welcome {mention} to TurboPepe-AI (TBP)!\n"
+                    "This chat is protected by an AI-based security system.\n"
+                    "Use /rules to see all safety rules.\n"
+                    "Willkommen! Mit /rules bekommst du die Regeln auch auf Deutsch. 🐸"
+                )
+            tg_send(chat_id, welcome)
+        # trotzdem weiterlaufen (falls Welcome + Text in derselben Nachricht)
+        # aber meist ist das eine eigene Nachricht.
+
+    # Foto → hier jetzt mit getrennten Caption-Listen
     if "photo" in msg:
         if CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID:
             caption = random.choice(MEME_CAPTIONS_CBOOST)
@@ -668,6 +631,38 @@ def telegram_webhook():
     low  = text.lower()
     lang = "de" if is_de(text) else "en"
     MEM["chat_count"] += 1
+
+    # --- Security-Filter: Listing-/Promo-/Service-Spam ---
+    if not is_admin(user_id):
+        reason = detect_suspicious_message(text)
+        if reason:
+            tg_delete(chat_id, msg_id)
+            if reason == "listing":
+                warn = say(
+                    lang,
+                    "🚫 Keine bezahlten CoinMarketCap/Coingecko-Listing-Angebote im TBP-Chat. "
+                    "Diese Nachricht wurde aus Sicherheitsgründen entfernt.",
+                    "🚫 No paid CoinMarketCap/Coingecko listing offers in the TBP chat. "
+                    "This message was removed for security reasons."
+                )
+            elif reason == "service":
+                warn = say(
+                    lang,
+                    "🚫 Keine Service-Werbung (Animation, Marketing, Promotion usw.) im TBP-Chat. "
+                    "Bitte respektiere die Community-Regeln (/rules).",
+                    "🚫 No service promotion (animation, marketing, promotion, etc.) in the TBP chat. "
+                    "Please respect the community rules (/rules)."
+                )
+            else:  # promo
+                warn = say(
+                    lang,
+                    "🚫 Werbung für andere Token, Projekte oder Gruppen ist hier nicht erlaubt. "
+                    "Diese Nachricht wurde entfernt. Für die Regeln: /rules.",
+                    "🚫 Advertising other tokens, projects or groups is not allowed here. "
+                    "Message removed. For the rules: /rules."
+                )
+            tg_send(chat_id, warn)
+            return jsonify({"ok": True})
 
     # ---- Admin-Response-Rate /0 /1 /2 /mode ----
     if low.startswith("/0") or low.startswith("/1") or low.startswith("/2") or low.startswith("/mode"):
@@ -694,41 +689,18 @@ def telegram_webhook():
             tg_send(chat_id, "Reply mode set to: EVERY 10th message.", reply_to=msg_id, preview=False)
             return jsonify({"ok": True})
 
-    # ----- /rules /security -----
-    if low.startswith("/rules") or low.startswith("/security"):
-        rules_text = say(
-            lang,
-            (
-                "📜 <b>TBP-AI Security & Chat-Regeln</b>\n\n"
-                "• Keine bezahlten CoinMarketCap- oder Listing-Angebote.\n"
-                "• CoinMarketCap kontaktiert NIEMALS über Telegram für Fast-Track-Deals.\n"
-                "• Keine Werbung für andere Token, Projekte oder fremde Gruppen.\n"
-                "• Nur offizielle TBP-Links sind erlaubt (Website, Sushi, Charts, Scan, offizielles TG & X).\n"
-                "• Wiederholte Verstöße werden automatisch stumm geschaltet.\n\n"
-                "TBP-AI überwacht den Chat mit einem AI-Security-System, um Scam & Spam zu filtern und die Community zu schützen 🛡🐸"
-            ),
-            (
-                "📜 <b>TBP-AI Security & Chat Rules</b>\n\n"
-                "• No paid CoinMarketCap or listing offers.\n"
-                "• CoinMarketCap will NEVER contact you on Telegram for fast-track deals.\n"
-                "• No promotion of other tokens, projects or external groups.\n"
-                "• Only official TBP links are allowed (website, Sushi, charts, scan, official TG & X).\n"
-                "• Repeated violations will be automatically muted.\n\n"
-                "TBP-AI runs an AI-based security system to filter scam & spam and protect the community 🛡🐸"
-            )
-        )
-        tg_send(chat_id, rules_text, reply_to=msg_id, preview=False)
-        return jsonify({"ok": True})
-
     # ----- Commands -----
     if low.startswith("/start"):
+        # Unterschiedliche Begrüßung je nach Chat
         if CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID:
             tg_send(
                 chat_id,
                 say(
                     lang,
-                    "Hi, ich bin C-BoostAI 🤖 – dein Assistent für den C-Boost Micro Supply Token auf Polygon. Frag mich alles rund um Vision, Utility und Zukunft. Keine Finanzberatung.",
-                    "Hi, I'm C-BoostAI 🤖 – your assistant for the C-Boost micro supply token on Polygon. Ask me anything about vision, utility and future plans. No financial advice."
+                    "Hi, ich bin C-BoostAI 🤖 – dein Assistent für den C-Boost Micro Supply Token auf Polygon. "
+                    "Frag mich alles rund um Vision, Utility und Zukunft. Keine Finanzberatung.",
+                    "Hi, I'm C-BoostAI 🤖 – your assistant for the C-Boost micro supply token on Polygon. "
+                    "Ask me anything about vision, utility and future plans. No financial advice."
                 ),
                 reply_to=msg_id
             )
@@ -749,11 +721,31 @@ def telegram_webhook():
         tg_send(chat_id, "/price • /stats • /chart • /links • /rules • /raid start|stop|status • /id", reply_to=msg_id, preview=False)
         return jsonify({"ok": True})
 
+    if low.startswith("/rules") or low.startswith("/security"):
+        text_rules = (
+            "🛡 <b>TurboPepe-AI Security Rules</b>\n\n"
+            "• No paid CoinMarketCap / CoinGecko listing offers.\n"
+            "• No promotion of other tokens / projects / groups.\n"
+            "• No service ads (marketing, promotions, shillers, call groups, animation offers, etc.).\n"
+            "• Only official TBP links (website, Sushi, charts, scan, TG, X).\n"
+            "• Scammers and repeat offenders can be muted or banned.\n\n"
+            "Deutsch:\n"
+            "• Keine bezahlten CMC/CG-Listing-Angebote.\n"
+            "• Keine Werbung für andere Tokens, Projekte oder Gruppen.\n"
+            "• Keine Service-Werbung (Marketing, Promotion, Shiller, Call-Groups, Animation usw.).\n"
+            "• Nur offizielle TBP-Links sind erlaubt.\n"
+            "• Betrüger und Wiederholungstäter können stumm geschaltet oder gebannt werden. 🐸"
+        )
+        tg_send(chat_id, text_rules, reply_to=msg_id, preview=False)
+        return jsonify({"ok": True})
+
+    # Chat-ID anzeigen (für CBOOST_CHAT_ID wichtig)
     if low.startswith("/id"):
         tg_send_any(chat_id, f"Chat ID: <code>{chat_id}</code>", reply_to=msg_id, preview=False)
         return jsonify({"ok": True})
 
     if low.startswith("/links"):
+        # Links sind TBP-spezifisch – in C-Boost-Chat nur kurzen Hinweis geben
         if CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID:
             tg_send(
                 chat_id,
@@ -773,12 +765,15 @@ def telegram_webhook():
         return jsonify({"ok": True})
 
     if low.startswith("/price") or WORD_PRICE.search(low):
+        # In der C-Boost-Gruppe aktuell keine Price-Funktion
         if CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID:
             tg_send(
                 chat_id,
                 say(lang,
-                    "Für C-Boost gibt es noch keinen Live-Preis – der Launch steht noch bevor. Fokus aktuell: Aufbau der Community und Boost-Raids.",
-                    "There is no live price for C-Boost yet – launch is still upcoming. Focus for now: building the community and boost raids.",
+                    "Für C-Boost gibt es noch keinen Live-Preis – der Launch steht noch bevor. "
+                    "Fokus aktuell: Aufbau der Community und Boost-Raids.",
+                    "There is no live price for C-Boost yet – launch is still upcoming. "
+                    "Focus for now: building the community and boost raids.",
                 ),
                 reply_to=msg_id
             )
@@ -800,8 +795,10 @@ def telegram_webhook():
             tg_send(
                 chat_id,
                 say(lang,
-                    "C-Boost ist noch im Aufbau – offizielle On-Chain-Stats folgen ab Launch. Bis dahin steht die Community- und Raid-Power im Fokus.",
-                    "C-Boost is still in preparation – official on-chain stats will follow after launch. Until then, focus is on community and raid power.",
+                    "C-Boost ist noch im Aufbau – offizielle On-Chain-Stats folgen ab Launch. "
+                    "Bis dahin steht die Community- und Raid-Power im Fokus.",
+                    "C-Boost is still in preparation – official on-chain stats will follow after launch. "
+                    "Until then, focus is on community and raid power.",
                 ),
                 reply_to=msg_id
             )
@@ -860,6 +857,7 @@ def telegram_webhook():
         tg_send(chat_id, "Usage: /raid start | /raid stop | /raid status", reply_to=msg_id)
         return jsonify({"ok": True})
 
+    # Wenn wir im Raid-Setup sind und jetzt ein Tweet-Link kommt
     st = RAID.get(chat_id)
     if st and st.get("await_link"):
         m = TWEET_RE.search(text)
@@ -872,6 +870,7 @@ def telegram_webhook():
         st["await_link"] = False
         st["active"] = True
 
+        # Buttons bleiben generisch (funktionieren in TBP & C-Boost)
         tg_buttons(
             chat_id,
             "🐸 RAID MODE ON!\nOpen the tweet, then **Like + Repost + Comment**.\nReply here with **done** or drop a screenshot. Let’s pump the vibes! 🚀",
@@ -886,10 +885,12 @@ def telegram_webhook():
         threading.Thread(target=remind, daemon=True).start()
         return jsonify({"ok": True})
 
+    # Teilnehmer melden "done"
     if st and st.get("active") and text.strip().lower() == "done":
         tg_send(chat_id, "✅ Logged! Thanks for boosting. Next frog up! 🐸⚡", reply_to=msg_id)
         return jsonify({"ok": True})
 
+    # --- Automatische Info: alle 10h oder nach 25 Chats (nur TBP-Text, daher lieber nicht im C-Boost-Chat spammen)
     try:
         if MEM["chat_count"] >= 25 and (not CBOOST_CHAT_ID or chat_id != CBOOST_CHAT_ID):
             tg_send(chat_id, autopost_text("en"))
@@ -898,10 +899,12 @@ def telegram_webhook():
     except Exception:
         pass
 
+    # --- Throttle: nur freie Nachrichten drosseln (Commands immer zulassen) ---
     if not low.startswith("/"):
         if not should_reply(chat_id):
             return jsonify({"ok": True})
 
+    # --- Normal AI Flow ---
     mode = "cboost" if (CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID) else "tbp"
     raw = call_openai(text, MEM["ctx"], mode=mode)
     if not raw:
