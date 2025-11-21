@@ -244,6 +244,9 @@ def format_mention(user: dict) -> str:
 def detect_suspicious_message(text: str) -> str | None:
     """
     Erkenne Scam / Promo / Service-Werbung.
+    ABER: Nur wenn jemand SELBST aktiv etwas anbietet
+    (\"I can list you\", \"I charge\", \"we offer\", ...).
+
     Rückgabe:
       "listing"  -> bezahlte CMC/CG-Listing-Angebote
       "service"  -> Animations-/Marketing-/Promo-Service
@@ -254,33 +257,58 @@ def detect_suspicious_message(text: str) -> str | None:
     if not t:
         return None
 
-    # Listing-Scam
-    for kw in LISTING_SCAM_KW:
-        if kw in t:
-            return "listing"
+    # Typische Selbst-Angebots-Phrasen
+    SELF_OFFER = [
+        "i can", "i will", "i help", "i handle", "i manage",
+        "we can", "we will", "we handle", "we manage",
+        "my team", "our team", "we offer", "i offer",
+        "my service", "my services", "our service", "our services",
+        "let's work", "lets work", "work with me", "work with us",
+        "dm me", "pm me", "inbox me", "contact me"
+    ]
 
-    # Service-Promo (Animator, Marketing, etc.)
-    for kw in SERVICE_PROMO_KW:
-        if kw in t:
-            # ein bisschen härter, wenn zugleich "i can" / "i will" usw.
-            if "i can" in t or "i will" in t or "i help" in t or "let's work" in t or "let us work" in t:
-                return "service"
-            return "service"
+    # Typische Payment-Phrasen
+    PAYMENT = [
+        "pay me", "payment", "for a fee", "small fee", "minimal fee",
+        "service fee", "only", "cost", "price", "charge a fee", "i charge"
+    ]
 
-    # Werbung für andere Projekte / Gruppen
+    def has_self_offer():
+        return any(p in t for p in SELF_OFFER)
+
+    def has_payment():
+        return any(p in t for p in PAYMENT)
+
+    # -------- Listing-Scams ----------
+    # Nur blocken, wenn:
+    #   (Listing-Keyword) UND (Selbst-Angebot ODER Payment-Hinweis)
+    if any(kw in t for kw in LISTING_SCAM_KW) and (has_self_offer() or has_payment()):
+        return "listing"
+
+    # -------- Service-Promotion (Animator, Marketing, etc.) ----------
+    # Nur blocken, wenn es wie ein eigenes Angebot aussieht
+    if any(kw in t for kw in SERVICE_PROMO_KW) and (has_self_offer() or "hire me" in t or "my portfolio" in t):
+        return "service"
+
+    # -------- Werbung für andere Projekte / Gruppen ----------
+    # Hier darf der Filter ruhig etwas schärfer sein, weil „join my new token“,
+    # fremde t.me-Links + „buy“ etc. fast immer Promo sind.
     for kw in OTHER_PROJECT_PHRASES:
         if kw in t:
             return "promo"
 
     # Fremde TG-Links
     if "t.me/" in t and "turbopepe25" not in t and "c-boost" not in t:
-        return "promo"
+        # Nur blocken, wenn zusätzlich Einladung drin ist
+        if "join" in t or "buy" in t or "airdrop" in t or "presale" in t:
+            return "promo"
 
     # Fremde Contracts + Marketing-Wörter
-    if "0x" in t and ("buy" in t or "launch" in t or "presale" in t):
+    if "0x" in t and ("buy" in t or "launch" in t or "presale" in t or "fairlaunch" in t):
         return "promo"
 
     return None
+
 
 
 # -------------------------
