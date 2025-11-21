@@ -521,28 +521,46 @@ def telegram_webhook():
     text    = (msg.get("text") or msg.get("caption") or "").strip()
     msg_id  = msg.get("message_id")
 
-    # === Welcome Message bei neuen Membern ===
-    if chat_id and "new_chat_members" in msg:
-        if CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID:
-            welcome = (
-                "👋 Welcome to the official <b>C-Boost</b> community!\n\n"
-                "This chat is protected by an AI-based security system.\n"
-                "• No paid listing / CMC offers\n"
-                "• No promotion of other tokens / groups\n"
-                "• Focus: C-Boost, raids & community 🚀\n\n"
-                "Use <code>/rules</code> to see all security rules."
-            )
-        else:
-            welcome = (
-                "👋 Welcome to the official <b>TurboPepe-AI (TBP)</b> community!\n\n"
-                "This chat is protected by an AI-based security system:\n"
-                "• No paid CoinMarketCap / listing offers\n"
-                "• No promotion of other tokens / projects / groups\n"
-                "• Only official TBP links (website, Sushi, charts, scan, TG, X)\n\n"
-                "Use <code>/rules</code> to see all security rules.\n"
-                "Willkommen! /rules zeigt dir die Sicherheitsregeln auch auf Deutsch 🐸"
-            )
-        tg_send(chat_id, welcome, reply_to=msg_id, preview=False)
+    # === Welcome Message bei neuen Membern (mit Namen) ===
+    if chat_id and msg.get("new_chat_members"):
+        for member in msg.get("new_chat_members", []):
+            # Bots nicht extra begrüßen
+            if member.get("is_bot"):
+                continue
+
+            first = member.get("first_name") or ""
+            last  = member.get("last_name") or ""
+            username = member.get("username")
+
+            display_name = (first + " " + last).strip()
+            if not display_name:
+                if username:
+                    display_name = f"@{username}"
+                else:
+                    display_name = "friend"
+
+            if CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID:
+                welcome = (
+                    f"👋 Welcome <b>{display_name}</b> to the official <b>C-Boost</b> community!\n\n"
+                    "This chat is protected by an AI-based security system.\n"
+                    "• No paid listing / CMC offers\n"
+                    "• No promotion of other tokens / groups\n"
+                    "• Focus: C-Boost, raids & community 🚀\n\n"
+                    "Use <code>/rules</code> to see all security rules."
+                )
+            else:
+                welcome = (
+                    f"👋 Welcome <b>{display_name}</b> to the official <b>TurboPepe-AI (TBP)</b> community!\n\n"
+                    "This chat is protected by an AI-based security system:\n"
+                    "• No paid CoinMarketCap / listing offers\n"
+                    "• No promotion of other tokens / projects / groups\n"
+                    "• Only official TBP links (website, Sushi, charts, scan, TG, X)\n\n"
+                    "Use <code>/rules</code> to see all security rules.\n"
+                    "Willkommen! /rules zeigt dir die Sicherheitsregeln auch auf Deutsch 🐸"
+                )
+
+            tg_send(chat_id, welcome, reply_to=msg_id, preview=False)
+
         return jsonify({"ok": True})
 
     # ==============================
