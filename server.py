@@ -53,20 +53,16 @@ MEM = {
     "ctx": [],                 # globaler Kontext (TBP + C-Boost gemischt, reicht hier)
     "last_autopost": None,
     "chat_count": 0,
-    "raid_on": False,
+    "raid_on": False,          # aktuell ungenutzt, stört aber nicht
     "raid_msg": "Drop a fresh TBP meme! 🐸⚡",
     # Throttle:
     "resp_mode": "0",           # "0"=alles, "1"=jede 3., "2"=jede 10.
     "resp_counter": {}          # pro chat_id Zähler
 }
 
-# Raid-State pro Chat
-RAID = {}  # chat_id -> {"active": bool, "await_link": bool, "tweet_url": str}
-
 # Regexe
 WORD_PRICE = re.compile(r"\b(preis|price|kurs|chart|charts)\b", re.I)
 GER_DET    = re.compile(r"\b(der|die|das|und|nicht|warum|wie|kann|preis|kurs|listung|tokenomics)\b", re.I)
-TWEET_RE   = re.compile(r"https?://(x\.com|twitter\.com)/\S+", re.I)
 
 # --- Neue Regex-Filter für Scams / Fremd-Werbung ---
 LISTING_SCAM_PATTERNS = [
@@ -87,7 +83,7 @@ PROMO_PATTERNS = [
     r"\bcontact me\b",
 ]
 
-# --- NEU: Muster für ILLEGALE ANGEBOTE (B) ---
+# --- Muster für ILLEGALE ANGEBOTE (B) ---
 ILLEGAL_OFFER_PATTERNS = [
     # Fake Pässe / Ausweise
     r"\b(verkaufe|verkauf|biete)\s+(fake|gefälschte[nr]?|falsche[nr]?)*\s*(pässe|pass|ausweis|ausweise|id|identität)\b",
@@ -528,7 +524,7 @@ def ask():
     return jsonify({"answer": ans})
 
 
-# *** NEU: Web-AI für die C-Boost Website ***
+# Web-AI für die C-Boost Website
 @app.route("/ask_cboost", methods=["POST"])
 def ask_cboost():
     data = request.json or {}
@@ -693,7 +689,7 @@ def telegram_webhook():
         return jsonify({"ok": True})
 
     if low.startswith("/help"):
-        tg_send(chat_id, "/price • /stats • /chart • /links • /rules • /security • /raid start|stop|status • /id", reply_to=msg_id, preview=False)
+        tg_send(chat_id, "/price • /stats • /chart • /links • /rules • /security • /id", reply_to=msg_id, preview=False)
         return jsonify({"ok": True})
 
     # Sicherheits-Regeln anzeigen (TBP vs. C-Boost)
@@ -823,70 +819,7 @@ def telegram_webhook():
         tg_buttons(chat_id, say(lang, "📊 Live-Chart:", "📊 Live chart:"), [("DexScreener", LINKS["dexscreener"]), ("DEXTools", LINKS["dextools"])])
         return jsonify({"ok": True})
 
-    # ----- RAID FLOW (/raid – für Admins, optional) -----
-    if low.startswith("/raid"):
-        parts = low.split()
-        sub = parts[1] if len(parts) > 1 else ""
-
-        if not is_admin(user_id):
-            tg_send(chat_id, "⛔ Only admins can start/stop raids.", reply_to=msg_id)
-            return jsonify({"ok": True})
-
-        if sub == "start":
-            RAID[chat_id] = {"active": False, "await_link": True, "tweet_url": ""}
-            tg_send(chat_id, "🐸 RAID SETUP: Please send the **tweet link** (X/Twitter).", reply_to=msg_id)
-            return jsonify({"ok": True})
-
-        if sub == "stop":
-            RAID.pop(chat_id, None)
-            tg_send(chat_id, "🧯 Raid stopped. Thanks for the energy!", reply_to=msg_id)
-            return jsonify({"ok": True})
-
-        if sub == "status":
-            st = RAID.get(chat_id)
-            if not st:
-                tg_send(chat_id, "ℹ️ No raid is configured.", reply_to=msg_id)
-            else:
-                tg_send(chat_id, f"🔎 Raid status:\n• active: {st['active']}\n• await_link: {st['await_link']}\n• tweet: {st['tweet_url'] or '-'}", reply_to=msg_id)
-            return jsonify({"ok": True})
-
-        tg_send(chat_id, "Usage: /raid start | /raid stop | /raid status", reply_to=msg_id)
-        return jsonify({"ok": True})
-
-    # Wenn wir im Raid-Setup sind und jetzt ein Tweet-Link kommt
-    st = RAID.get(chat_id)
-    if st and st.get("await_link"):
-        m = TWEET_RE.search(text)
-        if not m:
-            tg_send(chat_id, "❗That doesn't look like a tweet link. Please send a valid X/Twitter URL.", reply_to=msg_id)
-            return jsonify({"ok": True})
-
-        url = m.group(0)
-        st["tweet_url"] = url
-        st["await_link"] = False
-        st["active"] = True
-
-        # Buttons bleiben generisch (funktionieren in TBP & C-Boost)
-        tg_buttons(
-            chat_id,
-            "🐸 RAID MODE ON!\nOpen the tweet, then **Like + Repost + Comment**.\nReply here with **done** or drop a screenshot. Let’s pump the vibes! 🚀",
-            [("Open Tweet", url)]
-        )
-
-        def remind():
-            time.sleep(300)
-            if RAID.get(chat_id, {}).get("active"):
-                tg_buttons(chat_id, "⚡ RAID REMINDER\nLike • Repost • Comment → then write **done** here.",
-                           [("Open Tweet", url)])
-        threading.Thread(target=remind, daemon=True).start()
-        return jsonify({"ok": True})
-
-    # Teilnehmer melden "done"
-    if st and st.get("active") and text.strip().lower() == "done":
-        tg_send(chat_id, "✅ Logged! Thanks for boosting. Next frog up! 🐸⚡", reply_to=msg_id)
-        return jsonify({"ok": True})
-
-    # ---- NEU: Single-Word Trigger „raid.“ (C) ----
+    # ---- Single-Word Trigger „raid.“ (C bleibt) ----
     if text.strip().lower() == "raid.":
         if is_cboost_chat:
             reply_txt = say(
@@ -897,7 +830,7 @@ def telegram_webhook():
         else:
             reply_txt = say(
                 lang,
-                "🚀 RAID! TBP Army bereit! 🐸",
+                "🚀 RAID! TBP army bereit! 🐸",
                 "🚀 RAID! TBP army ready! 🐸"
             )
         tg_send(chat_id, reply_txt, reply_to=msg_id)
