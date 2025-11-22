@@ -87,6 +87,20 @@ PROMO_PATTERNS = [
     r"\bcontact me\b",
 ]
 
+# --- NEU: Muster für ILLEGALE ANGEBOTE (B) ---
+ILLEGAL_OFFER_PATTERNS = [
+    # Fake Pässe / Ausweise
+    r"\b(verkaufe|verkauf|biete)\s+(fake|gefälschte[nr]?|falsche[nr]?)*\s*(pässe|pass|ausweis|ausweise|id|identität)\b",
+    r"\b(fake|gefälschte[nr]?|falsche[nr]?)\s+(pässe|pass|ausweis|ausweise|id)\b",
+    # Drogenverkauf
+    r"\b(verkaufe|verkauf|biete|liefere)\s+(drogen|koks|kokain|gras|weed|hanf|mdma|xtc|lsd)\b",
+    # Hacking / DDoS Services
+    r"\b(verkaufe|biete|mache)\s+(hacking|ddos|doxxing|botnet|hack)\s*(service|dienst|dienstleistung|angriff)?\b",
+    r"\b(suche|brauche)\s+jemanden\s+der\s+(hacken|ddos|accounts knackt|websites angreift)\b",
+    # Gestohlene Daten / Karten
+    r"\b(verkaufe|biete)\s+(gestohlene[nr]?|geklaute[nr]?)\s+(daten|kreditkarten|karten|accounts|konten)\b",
+]
+
 # App
 app = Flask(__name__)
 CORS(app)
@@ -210,7 +224,7 @@ def tg_buttons(chat_id, text, buttons):
 
 def tg_delete_message(chat_id, message_id):
     """
-    Löscht eine Nachricht (für Scam / Promo).
+    Löscht eine Nachricht (für Scam / Promo / Illegale Angebote).
     """
     token = _choose_token_for_chat(chat_id)
     if not token:
@@ -225,7 +239,7 @@ def tg_delete_message(chat_id, message_id):
         pass
 
 # -------------------------
-# Scam / Promo Detection
+# Scam / Promo / Illegale Angebote Detection
 # -------------------------
 
 def is_listing_scam(text: str) -> bool:
@@ -247,6 +261,18 @@ def is_external_promo(text: str) -> bool:
     # extra: "i'm from <…> marketing", "we connect projects"
     if "marketing" in t and ("hi team" in t or "i'm from" in t or "we connect projects" in t):
         return True
+    return False
+
+
+def is_illegal_offer(text: str) -> bool:
+    """
+    Erkennung von direkten illegalen Angeboten (Fake-Pässe, Drogen, Hacking-Services, gestohlene Daten).
+    Normale Diskussionen sollen möglichst nicht getroffen werden.
+    """
+    t = text.lower()
+    for pat in ILLEGAL_OFFER_PATTERNS:
+        if re.search(pat, t):
+            return True
     return False
 
 # -------------------------
@@ -797,7 +823,7 @@ def telegram_webhook():
         tg_buttons(chat_id, say(lang, "📊 Live-Chart:", "📊 Live chart:"), [("DexScreener", LINKS["dexscreener"]), ("DEXTools", LINKS["dextools"])])
         return jsonify({"ok": True})
 
-    # ----- RAID FLOW -----
+    # ----- RAID FLOW (/raid – für Admins, optional) -----
     if low.startswith("/raid"):
         parts = low.split()
         sub = parts[1] if len(parts) > 1 else ""
@@ -860,6 +886,23 @@ def telegram_webhook():
         tg_send(chat_id, "✅ Logged! Thanks for boosting. Next frog up! 🐸⚡", reply_to=msg_id)
         return jsonify({"ok": True})
 
+    # ---- NEU: Single-Word Trigger „raid.“ (C) ----
+    if text.strip().lower() == "raid.":
+        if is_cboost_chat:
+            reply_txt = say(
+                lang,
+                "⚡ RAID! C-Boost Community bereit! 🚀",
+                "⚡ RAID! C-Boost community ready! 🚀"
+            )
+        else:
+            reply_txt = say(
+                lang,
+                "🚀 RAID! TBP Army bereit! 🐸",
+                "🚀 RAID! TBP army ready! 🐸"
+            )
+        tg_send(chat_id, reply_txt, reply_to=msg_id)
+        return jsonify({"ok": True})
+
     # --- Automatische Info: alle 10h oder nach 25 Chats (nur TBP-Text, daher lieber nicht im C-Boost-Chat spammen)
     try:
         if MEM["chat_count"] >= 25 and not is_cboost_chat:
@@ -869,8 +912,31 @@ def telegram_webhook():
     except Exception:
         pass
 
-    # --- AI Security Filter: Listing-Scams & externe Promo ---
+    # --- AI Security Filter: Illegale Angebote, Listing-Scams & externe Promo ---
     if not low.startswith("/") and not is_admin(user_id):
+        # B) Illegale Angebote: Nachricht löschen + Warnung
+        if is_illegal_offer(low):
+            tg_delete_message(chat_id, msg_id)
+            if is_cboost_chat:
+                warn = say(
+                    lang,
+                    "⚠️ Illegale Angebote (Fake-Pässe, Drogen, Hacking-Services, gestohlene Daten usw.) sind in dieser C-Boost Gruppe strikt verboten. "
+                    "Deine Nachricht wurde entfernt.",
+                    "⚠️ Illegal offers (fake IDs, drugs, hacking services, stolen data, etc.) are strictly forbidden in this C-Boost group. "
+                    "Your message has been removed."
+                )
+            else:
+                warn = say(
+                    lang,
+                    "⚠️ Illegale Angebote (Fake-Pässe, Drogen, Hacking-Services, gestohlene Daten usw.) sind in diesem TBP-Chat strikt verboten. "
+                    "Deine Nachricht wurde entfernt.",
+                    "⚠️ Illegal offers (fake IDs, drugs, hacking services, stolen data, etc.) are strictly forbidden in this TBP chat. "
+                    "Your message has been removed."
+                )
+            tg_send(chat_id, warn)
+            return jsonify({"ok": True})
+
+        # Listing-Scams
         if is_listing_scam(low):
             tg_delete_message(chat_id, msg_id)
             if is_cboost_chat:
@@ -892,6 +958,7 @@ def telegram_webhook():
             tg_send(chat_id, warn)
             return jsonify({"ok": True})
 
+        # Externe Promo
         if is_external_promo(low):
             tg_delete_message(chat_id, msg_id)
             if is_cboost_chat:
