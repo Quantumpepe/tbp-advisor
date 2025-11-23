@@ -48,6 +48,12 @@ BURNED      = 10_000_000_000
 OWNER       = 14_000_000_000
 CIRC_SUPPLY = MAX_SUPPLY - BURNED - OWNER
 
+# ==== C-BOOST MARKET CONFIG (NEU) ====
+# Du kannst diese Werte als ENV Variablen setzen oder hier direkt eintragen.
+CBOOST_NETWORK       = os.environ.get("CBOOST_NETWORK", "polygon_pos").strip() or "polygon_pos"
+CBOOST_POOL_ADDRESS  = os.environ.get("CBOOST_POOL_ADDRESS", "").strip()
+CBOOST_LOGO_URL      = os.environ.get("CBOOST_LOGO_URL", "").strip()  # z.B. https://.../cboost-logo.png
+
 # Memory / State
 MEM = {
     "ctx": [],                 # globaler Kontext (TBP + C-Boost gemischt, reicht hier)
@@ -218,6 +224,37 @@ def tg_buttons(chat_id, text, buttons):
         pass
 
 
+def tg_send_photo(chat_id, photo_url, caption=None, reply_to=None):
+    """
+    Sendet ein Foto (z.B. C-Boost Logo) mit optionaler Caption.
+    """
+    token = _choose_token_for_chat(chat_id)
+    if not token or not photo_url:
+        # Fallback: nur Text senden, falls kein Foto möglich
+        if caption:
+            tg_send(chat_id, caption, reply_to=reply_to, preview=True)
+        return
+    try:
+        payload = {
+            "chat_id": chat_id,
+            "photo": photo_url,
+            "parse_mode": "HTML",
+        }
+        if caption:
+            payload["caption"] = caption
+        if reply_to:
+            payload["reply_to_message_id"] = reply_to
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendPhoto",
+            json=payload,
+            timeout=10,
+        )
+    except Exception:
+        # Fallback
+        if caption:
+            tg_send(chat_id, caption, reply_to=reply_to, preview=True)
+
+
 def tg_delete_message(chat_id, message_id):
     """
     Löscht eine Nachricht (für Scam / Promo / Illegale Angebote).
@@ -328,6 +365,54 @@ def get_market_stats():
     except Exception:
         return None
 
+# -------------------------
+# Market Data (C-Boost) – NEU
+# -------------------------
+
+def get_cboost_live_data():
+    """
+    Holt C-Boost Live-Daten (Preis, Market Cap, 24h Volumen) von GeckoTerminal.
+    Benötigt: CBOOST_NETWORK + CBOOST_POOL_ADDRESS
+    """
+    if not CBOOST_POOL_ADDRESS:
+        return None
+    try:
+        url = f"https://api.geckoterminal.com/api/v2/networks/{CBOOST_NETWORK}/pools/{CBOOST_POOL_ADDRESS}"
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json().get("data", {})
+        attrs = data.get("attributes", {}) or {}
+
+        price = attrs.get("base_token_price_usd")
+        market_cap = attrs.get("market_cap_usd")
+        volume_dict = attrs.get("volume_usd") or {}
+        volume_24h = volume_dict.get("h24")
+
+        # Konvertieren in float, wenn möglich
+        try:
+            price = float(price) if price not in (None, "", "null") else None
+        except Exception:
+            price = None
+        try:
+            market_cap = float(market_cap) if market_cap not in (None, "", "null") else None
+        except Exception:
+            market_cap = None
+        try:
+            volume_24h = float(volume_24h) if volume_24h not in (None, "", "null") else None
+        except Exception:
+            volume_24h = None
+
+        chart_url = f"https://www.geckoterminal.com/{CBOOST_NETWORK}/pools/{CBOOST_POOL_ADDRESS}"
+
+        return {
+            "price": price,
+            "market_cap": market_cap,
+            "volume_24h": volume_24h,
+            "chart_url": chart_url,
+        }
+    except Exception as e:
+        print(f"[CBOOST] get_cboost_live_data error: {e}")
+        return None
 
 # -------------------------
 # OpenAI (optional)
@@ -753,19 +838,42 @@ def telegram_webhook():
         )
         return jsonify({"ok": True})
 
+    # ==== PRICE / CHART – TBP & C-BOOST (angepasst) ====
     if low.startswith("/price") or WORD_PRICE.search(low):
-        # In der C-Boost-Gruppe aktuell keine Price-Funktion
+        # C-Boost Chat → C-Boost Live-Daten + Logo
         if is_cboost_chat:
-            tg_send(
-                chat_id,
-                say(lang,
-                    "Für C-Boost gibt es noch keinen Live-Preis – der Launch steht noch bevor. Fokus aktuell: Aufbau der Community und Boost-Raids.",
-                    "There is no live price for C-Boost yet – launch is still upcoming. Focus for now: building the community and boost raids.",
-                ),
-                reply_to=msg_id
-            )
+            data = get_cboost_live_data()
+            if not data:
+                tg_send(
+                    chat_id,
+                    say(
+                        lang,
+                        "⚠️ Konnte die C-Boost Live-Daten aktuell nicht laden. Bitte später nochmals versuchen.",
+                        "⚠️ Could not load C-Boost live data right now. Please try again later."
+                    ),
+                    reply_to=msg_id
+                )
+                return jsonify({"ok": True})
+
+            price = data.get("price")
+            mc    = data.get("market_cap")
+            vol   = data.get("volume_24h")
+            chart = data.get("chart_url")
+
+            caption_lines = [
+                "⚡ <b>C-Boost Live Data</b>\n",
+                f"🪙 <b>Price:</b> {fmt_usd(price, 10) if price is not None else 'N/A'}",
+                f"💰 <b>Market Cap:</b> {fmt_usd(mc, 2) if mc is not None else 'N/A'}",
+                f"📊 <b>24h Volume:</b> {fmt_usd(vol, 2) if vol is not None else 'N/A'}",
+            ]
+            if chart:
+                caption_lines.append(f"\n📈 <a href=\"{chart}\">Open Live Chart</a>")
+
+            caption = "\n".join(caption_lines)
+            tg_send_photo(chat_id, CBOOST_LOGO_URL, caption=caption, reply_to=msg_id)
             return jsonify({"ok": True})
 
+        # TBP Standard-Flow
         p = get_live_price()
         s = get_market_stats() or {}
         lines = []
@@ -783,14 +891,29 @@ def telegram_webhook():
 
     if low.startswith("/stats"):
         if is_cboost_chat:
-            tg_send(
-                chat_id,
-                say(lang,
-                    "C-Boost ist noch im Aufbau – offizielle On-Chain-Stats folgen ab Launch. Bis dahin steht die Community- und Raid-Power im Fokus.",
-                    "C-Boost is still in preparation – official on-chain stats will follow after launch. Until then, focus is on community and raid power.",
-                ),
-                reply_to=msg_id
-            )
+            data = get_cboost_live_data()
+            if not data:
+                tg_send(
+                    chat_id,
+                    say(
+                        lang,
+                        "C-Boost-Statistiken konnten gerade nicht geladen werden. Bitte später nochmals versuchen.",
+                        "Could not load C-Boost stats right now. Please try again later.",
+                    ),
+                    reply_to=msg_id
+                )
+                return jsonify({"ok": True})
+
+            price = data.get("price")
+            mc    = data.get("market_cap")
+            vol   = data.get("volume_24h")
+            lines = [
+                "⚡ C-Boost Stats:",
+                f"• Price: {fmt_usd(price, 10) if price is not None else 'N/A'}",
+                f"• Market Cap: {fmt_usd(mc, 2) if mc is not None else 'N/A'}",
+                f"• Vol 24h: {fmt_usd(vol, 2) if vol is not None else 'N/A'}",
+            ]
+            tg_send(chat_id, "\n".join(lines), reply_to=msg_id)
             return jsonify({"ok": True})
 
         s = get_market_stats() or {}
@@ -806,14 +929,26 @@ def telegram_webhook():
 
     if low.startswith("/chart"):
         if is_cboost_chat:
-            tg_send(
-                chat_id,
-                say(lang,
-                    "Der C-Boost-Chart wird nach dem Launch verlinkt. Bis dahin: Memes, Raids und Community-Aufbau. ⚡",
-                    "C-Boost chart will be linked after launch. Until then: memes, raids and community building. ⚡",
-                ),
-                reply_to=msg_id
+            data = get_cboost_live_data()
+            chart = data.get("chart_url") if data else None
+            if not chart:
+                tg_send(
+                    chat_id,
+                    say(
+                        lang,
+                        "Der C-Boost-Chart ist aktuell nicht verfügbar. Bitte später erneut versuchen.",
+                        "C-Boost chart is not available right now. Please try again later.",
+                    ),
+                    reply_to=msg_id
+                )
+                return jsonify({"ok": True})
+
+            txt = say(
+                lang,
+                f"📊 C-Boost Live-Chart:\n{chart}",
+                f"📊 C-Boost live chart:\n{chart}",
             )
+            tg_send(chat_id, txt, reply_to=msg_id)
             return jsonify({"ok": True})
 
         tg_buttons(chat_id, say(lang, "📊 Live-Chart:", "📊 Live chart:"), [("DexScreener", LINKS["dexscreener"]), ("DEXTools", LINKS["dextools"])])
