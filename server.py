@@ -30,6 +30,8 @@ CBOOST_CHAT_ID = int(os.environ.get("CBOOST_CHAT_ID", "0") or "0")
 # TBP on Polygon
 TBP_CONTRACT = "0x50c40e03552A42fbE41b2507d522F56d7325D1F2"
 TBP_PAIR     = "0x945c73101e11cc9e529c839d1d75648d04047b0b"  # Sushi pair
+# C-Boost Pair auf Polygon (QuickSwap)
+CBOOST_PAIR  = "0x24E4a8a4c4726D62da98A38065Fa649a9d93082e"
 
 LINKS = {
     "website":      "https://quantumpepe.github.io/TurboPepe/",
@@ -655,6 +657,63 @@ def ask_cboost():
     MEM["ctx"].append(f"C-Boost: {ans}")
     MEM["ctx"] = MEM["ctx"][-10:]
     return jsonify({"answer": ans})
+# =========================
+# C-Boost PRICE API für Website
+# =========================
+
+def get_cboost_live_data():
+    """
+    Holt Price / MarketCap / Volumen von DexScreener für die Website.
+    """
+    pair = "0x24E4a8a4c4726D62da98A38065Fa649a9d93082e"  # C-Boost Pair auf Polygon
+
+    try:
+        r = requests.get(
+            f"https://api.dexscreener.com/latest/dex/pairs/polygon/{pair}",
+            timeout=6
+        )
+        r.raise_for_status()
+        j = r.json()
+        pair_data = j.get("pair") or (j.get("pairs") or [{}])[0]
+
+        price      = pair_data.get("priceUsd")
+        mc         = pair_data.get("fdv") or pair_data.get("marketCap")
+        volume_24h = (pair_data.get("volume", {}) or {}).get("h24") or pair_data.get("volume24h")
+
+        def to_float(v):
+            try:
+                return float(v)
+            except:
+                return None
+
+        return {
+            "price": to_float(price),
+            "market_cap": to_float(mc),
+            "volume_24h": to_float(volume_24h),
+            "chart_url": f"https://dexscreener.com/polygon/{pair}",
+        }
+
+    except Exception:
+        return None
+
+
+@app.route("/cboost_price", methods=["GET"])
+def cboost_price():
+    """
+    API für die C-Boost Webseite.
+    Gibt Price, Market Cap, Volume zurück.
+    """
+    data = get_cboost_live_data()
+    if not data:
+        return jsonify({"ok": False, "error": "no_data"}), 200
+
+    return jsonify({
+        "ok": True,
+        "price": data["price"],
+        "market_cap": data["market_cap"],
+        "volume_24h": data["volume_24h"],
+        "chart_url": data["chart_url"]
+    })
 
 # =========================
 # TELEGRAM
