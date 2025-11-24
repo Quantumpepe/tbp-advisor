@@ -1118,6 +1118,7 @@ def telegram_webhook():
             tg_send_photo(chat_id, CBOOST_LOGO_URL, caption=caption, reply_to=msg_id)
             return jsonify({"ok": True})
 
+               # TBP Standard-Flow
         p = get_live_price()
         s = get_market_stats() or {}
         lines = []
@@ -1129,12 +1130,26 @@ def telegram_webhook():
             lines.append("💧 " + say(lang, "Liquidität", "Liquidity") + f": {fmt_usd(s['liquidity_usd'])}")
         if s.get("volume_24h") not in (None, "", "null"):
             lines.append(f"🔄 Vol 24h: {fmt_usd(s['volume_24h'])}")
-        tg_buttons(
-            chat_id,
-            "\n".join(lines) if lines else say(lang, "Keine Daten.", "No data."),
-            [("Chart", LINKS["dexscreener"]), ("Sushi", LINKS["buy"])]
-        )
+
+        caption = "\n".join(lines) if lines else say(lang, "Keine Daten.", "No data.")
+
+        # 🐸 TBP-Logo anzeigen
+        if TBP_LOGO_URL:
+            tg_send_photo(
+                chat_id,
+                TBP_LOGO_URL,
+                caption=caption,
+                reply_to=msg_id
+            )
+        else:
+            tg_buttons(
+                chat_id,
+                caption,
+                [("Chart", LINKS["dexscreener"]), ("Sushi", LINKS["buy"])]
+            )
+
         return jsonify({"ok": True})
+)
 
     if low.startswith("/stats"):
         if is_cboost_chat:
