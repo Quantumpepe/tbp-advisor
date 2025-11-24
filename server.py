@@ -508,7 +508,6 @@ RULES:
         return None
 
 
-
 def clean_answer(s: str) -> str:
     if not s:
         return ""
@@ -901,8 +900,6 @@ def start_buybot_background():
 
     threading.Thread(target=loop, daemon=True).start()
 
-
-
 # =========================
 # FLASK WEB (health/ask/admin)
 # =========================
@@ -1020,12 +1017,56 @@ MEME_CAPTIONS_CBOOST = [
     "C-Boost mode: ON. Need a spicy caption? 😏",
 ]
 
+# ============================================
+# IDLE / BORED BOT SYSTEM
+# ============================================
+
+IDLE_MESSAGES = [
+    "Hello? Anybody alive here? 👀 It's getting too quiet…",
+    "Guys… I’m bored. Someone say something before I start talking to myself 😭",
+    "Wake up team! We can sleep later — first we go to the moon! 🌕🚀",
+    "Silence detected… initiating boredom protocol 🤖💤",
+    "If everyone is sleeping, I’ll start drinking coffee alone ☕😔",
+]
+
+LAST_CHAT_ACTIVITY = datetime.utcnow()
+
+def idle_watchdog():
+    global LAST_CHAT_ACTIVITY
+    while True:
+        try:
+            now = datetime.utcnow()
+            diff = (now - LAST_CHAT_ACTIVITY).total_seconds()
+
+            # Nach 5 Minuten ohne Nachrichten → Idle-Spruch
+            if diff > 300:
+                tbp_chat = MEM.get("tbp_chat_id")
+                if tbp_chat:
+                    msg = random.choice(IDLE_MESSAGES)
+                    tg_send(tbp_chat, msg)
+                    LAST_CHAT_ACTIVITY = datetime.utcnow()
+
+        except Exception as e:
+            print("Idle watchdog error:", e)
+
+        time.sleep(20)  # alle 20 Sekunden prüfen
+
+# Idle-System starten (nur einmal)
+if MEM.get("_idle_started") != True:
+    threading.Thread(target=idle_watchdog, daemon=True).start()
+    MEM["_idle_started"] = True
+
 @app.route("/telegram", methods=["GET", "POST"])
 def telegram_webhook():
     if request.method == "GET":
         return jsonify({"ok": True, "route": "telegram"}), 200
 
     update  = request.json or {}
+
+    # jede neue Nachricht (oder Update) zählt als Aktivität
+    global LAST_CHAT_ACTIVITY
+    LAST_CHAT_ACTIVITY = datetime.utcnow()
+
     msg     = update.get("message", {}) or {}
     chat    = msg.get("chat", {}) or {}
     chat_id = chat.get("id")
@@ -1244,7 +1285,7 @@ def telegram_webhook():
             tg_send_photo(chat_id, CBOOST_LOGO_URL, caption=caption, reply_to=msg_id)
             return jsonify({"ok": True})
 
-               # TBP Standard-Flow
+        # TBP Standard-Flow
         p = get_live_price()
         s = get_market_stats() or {}
         lines = []
