@@ -1,4 +1,4 @@
-# server.py — TBP-AI + C-BoostAI unified backend (Web + Telegram) — with AI security filters
+# server.py — TBP-AI + C-BoostAI unified backend (Web + Telegram) — with AI security filters + BUY BOT
 # -*- coding: utf-8 -*-
 
 import os, re, json, time, threading, random
@@ -33,6 +33,10 @@ TBP_PAIR     = "0x945c73101e11cc9e529c839d1d75648d04047b0b"  # Sushi pair
 # C-Boost Pair auf Polygon (QuickSwap)
 CBOOST_PAIR  = "0x24E4a8a4c4726D62da98A38065Fa649a9d93082e"
 
+# Logos für Preis-/Buy-Posts
+TBP_LOGO_URL     = os.environ.get("TBP_LOGO_URL", "").strip()
+CBOOST_LOGO_URL  = os.environ.get("CBOOST_LOGO_URL", "").strip()  # z.B. https://.../cboost-logo.png
+
 LINKS = {
     "website":      "https://quantumpepe.github.io/TurboPepe/",
     "buy":          f"https://www.sushi.com/polygon/swap?token0=NATIVE&token1={TBP_CONTRACT}",
@@ -50,11 +54,10 @@ BURNED      = 10_000_000_000
 OWNER       = 14_000_000_000
 CIRC_SUPPLY = MAX_SUPPLY - BURNED - OWNER
 
-# ==== C-BOOST MARKET CONFIG ====
-# Werte als ENV Variablen setzen oder hier direkt eintragen.
+# ==== C-BOOST MARKET CONFIG (für Trades / Charts) ====
 CBOOST_NETWORK       = os.environ.get("CBOOST_NETWORK", "polygon_pos").strip() or "polygon_pos"
-CBOOST_POOL_ADDRESS  = os.environ.get("CBOOST_POOL_ADDRESS", "").strip()
-CBOOST_LOGO_URL      = os.environ.get("CBOOST_LOGO_URL", "").strip()  # z.B. https://.../cboost-logo.png
+# Optional: wenn du es lieber aus ENV ziehen willst, ansonsten nutzen wir CBOOST_PAIR
+CBOOST_POOL_ADDRESS  = os.environ.get("CBOOST_POOL_ADDRESS", CBOOST_PAIR).strip()
 
 # Memory / State
 MEM = {
@@ -65,7 +68,13 @@ MEM = {
     "raid_msg": "Drop a fresh TBP meme! 🐸⚡",
     # Throttle:
     "resp_mode": "0",           # "0"=alles, "1"=jede 3., "2"=jede 10.
-    "resp_counter": {}          # pro chat_id Zähler
+    "resp_counter": {},         # pro chat_id Zähler
+    # Buybot State:
+    "buybot": {
+        "tbp":   {"last_hash": None, "known_wallets": set()},
+        "cboost":{"last_hash": None, "known_wallets": set()},
+    },
+    "tbp_chat_id": None,        # wird beim ersten TBP-Chat gesetzt
 }
 
 # Regexe
@@ -124,6 +133,19 @@ def fmt_usd(x, max_digits=2):
         return f"${float(x):,.{max_digits}f}"
     except Exception:
         return "N/A"
+
+def _safe_float(v):
+    try:
+        if v in (None, "", "null"):
+            return None
+        return float(v)
+    except Exception:
+        return None
+
+def _short_addr(addr: str, length: int = 6) -> str:
+    if not addr or len(addr) <= 2*length:
+        return addr or "unknown"
+    return f"{addr[:length]}...{addr[-length:]}"
 
 def is_admin(user_id) -> bool:
     try:
@@ -228,7 +250,7 @@ def tg_buttons(chat_id, text, buttons):
 
 def tg_send_photo(chat_id, photo_url, caption=None, reply_to=None):
     """
-    Sendet ein Foto (z.B. C-Boost Logo) mit optionaler Caption.
+    Sendet ein Foto (z.B. TBP / C-Boost Logo) mit optionaler Caption.
     """
     token = _choose_token_for_chat(chat_id)
     if not token or not photo_url:
@@ -358,95 +380,63 @@ def get_market_stats():
             "change_24h": pair.get("priceChange24h"),
             "volume_24h": (pair.get("volume", {}) or {}).get("h24") or pair.get("volume24h"),
             "liquidity_usd": (pair.get("liquidity") or {}).get("usd"),
+            "market_cap": pair.get("marketCap") or pair.get("fdv"),
         }
     except Exception:
         return None
 
-# -------------------------
-# Market Data (C-Boost) – Dexscreener + Gecko Fallback
-# -------------------------
-
-def get_cboost_live_data():
+def get_tbp_price_and_mc():
     """
-    Holt C-Boost Live-Daten (Preis, Market Cap, 24h Volumen).
-    Primär von Dexscreener, optional Fallback zu GeckoTerminal.
-    Benötigt: CBOOST_NETWORK + CBOOST_POOL_ADDRESS
+    TBP Preis + Market Cap (Dexscreener).
+    Wird vom Buybot und teilweise vom /price-Command genutzt.
     """
-    if not CBOOST_POOL_ADDRESS:
-        return None
-
-    price = None
-    market_cap = None
-    volume_24h = None
-
-    # Standard-Chart-Link (Gecko)
-    chart_url = f"https://www.geckoterminal.com/{CBOOST_NETWORK}/pools/{CBOOST_POOL_ADDRESS}"
-
-    # 1) Hauptquelle: Dexscreener
     try:
         r = requests.get(
-            f"https://api.dexscreener.com/latest/dex/pairs/polygon/{CBOOST_POOL_ADDRESS}",
-            timeout=10
+            f"https://api.dexscreener.com/latest/dex/pairs/polygon/{TBP_PAIR}",
+            timeout=6
         )
         r.raise_for_status()
         j = r.json()
         pair = j.get("pair") or (j.get("pairs") or [{}])[0]
+        price = _safe_float(pair.get("priceUsd"))
+        mc    = _safe_float(pair.get("marketCap") or pair.get("fdv"))
+        return price, mc
+    except Exception:
+        return None, None
 
-        v_price = pair.get("priceUsd")
-        v_mc    = pair.get("marketCap") or pair.get("fdv")
-        v_vol   = (pair.get("volume", {}) or {}).get("h24") or pair.get("volume24h")
+# -------------------------
+# Market Data (C-Boost) – Dexscreener (für Website & Bot)
+# -------------------------
 
-        try:
-            price = float(v_price) if v_price not in (None, "", "null") else None
-        except Exception:
-            price = None
+def get_cboost_live_data():
+    """
+    Holt Price / MarketCap / Volumen von DexScreener für die Website und den Bot.
+    """
+    pair = CBOOST_PAIR  # C-Boost Pair auf Polygon
 
-        try:
-            market_cap = float(v_mc) if v_mc not in (None, "", "null") else None
-        except Exception:
-            market_cap = None
+    try:
+        r = requests.get(
+            f"https://api.dexscreener.com/latest/dex/pairs/polygon/{pair}",
+            timeout=6
+        )
+        r.raise_for_status()
+        j = r.json()
+        pair_data = j.get("pair") or (j.get("pairs") or [{}])[0]
 
-        try:
-            volume_24h = float(v_vol) if v_vol not in (None, "", "null") else None
-        except Exception:
-            volume_24h = None
+        price      = _safe_float(pair_data.get("priceUsd"))
+        mc         = _safe_float(pair_data.get("fdv") or pair_data.get("marketCap"))
+        volume_24h = _safe_float((pair_data.get("volume", {}) or {}).get("h24") or pair_data.get("volume24h"))
+
+        return {
+            "price": price,
+            "market_cap": mc,
+            "volume_24h": volume_24h,
+            "chart_url": f"https://dexscreener.com/polygon/{pair}",
+        }
 
     except Exception as e:
         print(f"[CBOOST] Dexscreener error: {e}")
-
-    # 2) Fallback: GeckoTerminal (nur falls Preis oder Volumen fehlen)
-    if price is None or volume_24h is None:
-        try:
-            url = f"https://api.geckoterminal.com/api/v2/networks/{CBOOST_NETWORK}/pools/{CBOOST_POOL_ADDRESS}"
-            r = requests.get(url, timeout=10)
-            r.raise_for_status()
-            data = r.json().get("data", {})
-            attrs = data.get("attributes", {}) or {}
-
-            if price is None:
-                v = attrs.get("base_token_price_usd")
-                try:
-                    price = float(v) if v not in (None, "", "null") else None
-                except Exception:
-                    price = None
-
-            if volume_24h is None:
-                vol_dict = attrs.get("volume_usd") or {}
-                v = vol_dict.get("h24")
-                try:
-                    volume_24h = float(v) if v not in (None, "", "null") else None
-                except Exception:
-                    volume_24h = None
-
-        except Exception as e:
-            print(f"[CBOOST] Gecko fallback error: {e}")
-
-    return {
-        "price": price,
-        "market_cap": market_cap,
-        "volume_24h": volume_24h,
-        "chart_url": chart_url,
-    }
+        return None
 
 # -------------------------
 # OpenAI (optional)
@@ -571,6 +561,231 @@ def start_autopost_background(chat_id: int):
     threading.Thread(target=loop, daemon=True).start()
 
 # =========================
+# BUYBOT – TBP & C-BOOST
+# =========================
+
+TOKEN_BUYBOT = {
+    "tbp": {
+        "network": "polygon_pos",
+        "pool": TBP_PAIR,
+        "symbol": "TBP",
+        "name": "TurboPepe-AI",
+        "logo_url": TBP_LOGO_URL,
+        "min_usd": 5.0,
+    },
+    "cboost": {
+        "network": CBOOST_NETWORK or "polygon_pos",
+        "pool": CBOOST_POOL_ADDRESS or CBOOST_PAIR,
+        "symbol": "C-Boost",
+        "name": "C-Boost",
+        "logo_url": CBOOST_LOGO_URL,
+        "min_usd": 5.0,
+    },
+}
+
+def fetch_pool_trades(network: str, pool: str):
+    """
+    Holt die letzten Trades eines Pools von GeckoTerminal.
+    Wir nutzen nur Buys innerhalb der letzten 24h.
+    """
+    if not network or not pool:
+        return []
+
+    url = f"https://api.geckoterminal.com/api/v2/networks/{network}/pools/{pool}/trades"
+    try:
+        r = requests.get(url, timeout=8)
+        r.raise_for_status()
+        j = r.json()
+        data = j.get("data", []) or []
+        trades = []
+        for t in data:
+            attrs = t.get("attributes", {}) or {}
+            side = (attrs.get("trade_type") or attrs.get("side") or "").lower()
+            tx_hash = attrs.get("tx_hash") or attrs.get("transaction_hash") or t.get("id")
+            wallet = attrs.get("tx_from_address") or attrs.get("from_address") or attrs.get("maker") or attrs.get("taker")
+            usd = _safe_float(
+                attrs.get("volume_usd")
+                or attrs.get("amount_usd")
+                or attrs.get("amount_in_usd")
+                or attrs.get("amount_out_usd")
+            )
+            token_amount = _safe_float(
+                attrs.get("base_token_amount")
+                or attrs.get("token_amount")
+                or attrs.get("amount_out")
+                or attrs.get("amount_in")
+            )
+            ts = attrs.get("timestamp") or attrs.get("block_timestamp") or 0
+            try:
+                ts = int(ts)
+            except Exception:
+                ts = 0
+            price = _safe_float(
+                attrs.get("price_usd")
+                or attrs.get("token_price_usd")
+                or attrs.get("price")
+            )
+            trades.append({
+                "side": side,
+                "tx_hash": tx_hash,
+                "wallet": wallet,
+                "usd": usd,
+                "token_amount": token_amount,
+                "timestamp": ts,
+                "price_usd": price,
+            })
+        trades.sort(key=lambda x: x.get("timestamp") or 0)
+        return trades
+    except Exception as e:
+        print(f"[BUYBOT] trades error {network}/{pool}: {e}")
+        return []
+
+def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
+    usd = trade.get("usd")
+    token_amount = trade.get("token_amount")
+    wallet = trade.get("wallet")
+    tx_hash = trade.get("tx_hash")
+
+    price_now, mc_now = get_tbp_price_and_mc()
+    price_txt = fmt_usd(price_now, 12) if price_now is not None else "N/A"
+    mc_txt    = fmt_usd(mc_now, 0) if mc_now is not None else "N/A"
+
+    lines = [
+        "🐸 <b>New TBP Buy</b>",
+        "",
+        f"💰 Value: {fmt_usd(usd, 2) if usd is not None else 'N/A'}",
+        f"🪙 Amount: {token_amount:.4f} TBP" if token_amount is not None else "🪙 Amount: N/A",
+        f"📈 Price (after): {price_txt}",
+        f"🏦 MC: {mc_txt}",
+    ]
+
+    if wallet:
+        new_tag = " (NEW)" if is_new else ""
+        lines.append(f"👛 Wallet: <code>{_short_addr(wallet)}</code>{new_tag}")
+
+    if tx_hash:
+        lines.append(f"🔗 <a href=\"https://polygonscan.com/tx/{tx_hash}\">View on PolygonScan</a>")
+
+    caption = "\n".join(lines)
+    logo = TBP_LOGO_URL
+    if logo:
+        tg_send_photo(chat_id, logo, caption=caption)
+    else:
+        tg_send(chat_id, caption, preview=True)
+
+def send_cboost_buy_alert(chat_id: int, trade: dict, is_new: bool):
+    usd = trade.get("usd")
+    token_amount = trade.get("token_amount")
+    wallet = trade.get("wallet")
+    tx_hash = trade.get("tx_hash")
+
+    data = get_cboost_live_data() or {}
+    price_now = data.get("price")
+    mc_now    = data.get("market_cap")
+
+    price_txt = fmt_usd(price_now, 10) if price_now is not None else "N/A"
+    mc_txt    = fmt_usd(mc_now, 0) if mc_now is not None else "N/A"
+
+    lines = [
+        "⚡ <b>New C-Boost Buy</b>",
+        "",
+        f"💰 Value: {fmt_usd(usd, 2) if usd is not None else 'N/A'}",
+        f"🪙 Amount: {token_amount:.4f} C-Boost" if token_amount is not None else "🪙 Amount: N/A",
+        f"📈 Price (after): {price_txt}",
+        f"🏦 MC: {mc_txt}",
+    ]
+
+    if wallet:
+        new_tag = " (NEW)" if is_new else ""
+        lines.append(f"👛 Wallet: <code>{_short_addr(wallet)}</code>{new_tag}")
+
+    if tx_hash:
+        lines.append(f"🔗 <a href=\"https://polygonscan.com/tx/{tx_hash}\">View on PolygonScan</a>")
+
+    caption = "\n".join(lines)
+    logo = CBOOST_LOGO_URL
+    if logo:
+        tg_send_photo(chat_id, logo, caption=caption)
+    else:
+        tg_send(chat_id, caption, preview=True)
+
+def process_buybot_for(token_key: str, chat_id: int):
+    """
+    Holt neue Trades für TBP oder C-Boost und sendet Buys >= 5$.
+    """
+    cfg = TOKEN_BUYBOT.get(token_key)
+    if not cfg:
+        return
+
+    trades = fetch_pool_trades(cfg["network"], cfg["pool"])
+    if not trades:
+        return
+
+    state = MEM["buybot"][token_key]
+    last_hash = state.get("last_hash")
+    hashes = [t.get("tx_hash") for t in trades if t.get("tx_hash")]
+    if not hashes:
+        return
+
+    # Erstes Setup: nur Sync, keine alten Buys posten
+    if not last_hash:
+        state["last_hash"] = hashes[-1]
+        return
+
+    if last_hash not in hashes:
+        # zu alt, einfach resync ohne Spam
+        state["last_hash"] = hashes[-1]
+        return
+
+    idx = hashes.index(last_hash)
+    new_trades = trades[idx+1:]
+    if not new_trades:
+        return
+
+    for tr in new_trades:
+        side = (tr.get("side") or "").lower()
+        if "buy" not in side:
+            continue
+
+        usd = tr.get("usd") or 0
+        if usd is None or usd < cfg["min_usd"]:
+            continue
+
+        wallet = tr.get("wallet")
+        known = state["known_wallets"]
+        is_new = False
+        if wallet and wallet not in known:
+            known.add(wallet)
+            is_new = True
+
+        if token_key == "tbp":
+            send_tbp_buy_alert(chat_id, tr, is_new)
+        else:
+            send_cboost_buy_alert(chat_id, tr, is_new)
+
+    state["last_hash"] = hashes[-1]
+
+def start_buybot_background():
+    """
+    Startet einen Hintergrund-Thread, der TBP & C-Boost Pools regelmäßig pollt
+    und Buy-Alerts in die jeweiligen Chats sendet.
+    """
+    def loop():
+        while True:
+            try:
+                # TBP Chat: der erste Nicht-C-Boost-Chat, in dem der Bot läuft
+                tbp_chat = MEM.get("tbp_chat_id")
+                if tbp_chat:
+                    process_buybot_for("tbp", tbp_chat)
+                # C-Boost Chat: feste Chat-ID aus ENV
+                if CBOOST_CHAT_ID:
+                    process_buybot_for("cboost", CBOOST_CHAT_ID)
+            except Exception as e:
+                print(f"[BUYBOT] loop error: {e}")
+            time.sleep(25)   # Poll-Intervall (Sekunden)
+    threading.Thread(target=loop, daemon=True).start()
+
+# =========================
 # FLASK WEB (health/ask/admin)
 # =========================
 
@@ -589,8 +804,8 @@ def admin_set_webhook():
     if not ADMIN_SECRET or key != ADMIN_SECRET:
         return jsonify({"ok": False, "error": "unauthorized"}), 403
 
-    root = request.url_root.replace("http://", "https://")
-    url = root.rstrip("/") + "/telegram"
+    root_url = request.url_root.replace("http://", "https://")
+    url = root_url.rstrip("/") + "/telegram"
 
     tokens = [t for t in [TELEGRAM_TOKEN_TBP, TELEGRAM_TOKEN_CBOOST] if t]
     if not tokens:
@@ -657,45 +872,10 @@ def ask_cboost():
     MEM["ctx"].append(f"C-Boost: {ans}")
     MEM["ctx"] = MEM["ctx"][-10:]
     return jsonify({"answer": ans})
+
 # =========================
 # C-Boost PRICE API für Website
 # =========================
-
-def get_cboost_live_data():
-    """
-    Holt Price / MarketCap / Volumen von DexScreener für die Website.
-    """
-    pair = "0x24E4a8a4c4726D62da98A38065Fa649a9d93082e"  # C-Boost Pair auf Polygon
-
-    try:
-        r = requests.get(
-            f"https://api.dexscreener.com/latest/dex/pairs/polygon/{pair}",
-            timeout=6
-        )
-        r.raise_for_status()
-        j = r.json()
-        pair_data = j.get("pair") or (j.get("pairs") or [{}])[0]
-
-        price      = pair_data.get("priceUsd")
-        mc         = pair_data.get("fdv") or pair_data.get("marketCap")
-        volume_24h = (pair_data.get("volume", {}) or {}).get("h24") or pair_data.get("volume24h")
-
-        def to_float(v):
-            try:
-                return float(v)
-            except:
-                return None
-
-        return {
-            "price": to_float(price),
-            "market_cap": to_float(mc),
-            "volume_24h": to_float(volume_24h),
-            "chart_url": f"https://dexscreener.com/polygon/{pair}",
-        }
-
-    except Exception:
-        return None
-
 
 @app.route("/cboost_price", methods=["GET"])
 def cboost_price():
@@ -755,6 +935,10 @@ def telegram_webhook():
     # Flag: sind wir im C-Boost-Chat?
     is_cboost_chat = bool(CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID)
 
+    # TBP Chat-ID merken (für Buybot)
+    if not is_cboost_chat and MEM.get("tbp_chat_id") is None:
+        MEM["tbp_chat_id"] = chat_id
+
     # Neue Mitglieder personalisiert begrüßen (TBP vs. C-Boost)
     if new_members:
         for member in new_members:
@@ -791,6 +975,14 @@ def telegram_webhook():
         if MEM.get("_autopost_started") != True and not is_cboost_chat:
             start_autopost_background(chat_id)
             MEM["_autopost_started"] = True
+    except Exception:
+        pass
+
+    # Buybot-Thread einmalig starten (für TBP & C-Boost)
+    try:
+        if MEM.get("_buybot_started") != True:
+            start_buybot_background()
+            MEM["_buybot_started"] = True
     except Exception:
         pass
 
@@ -1013,6 +1205,8 @@ def telegram_webhook():
             lines.append(f"• Vol 24h: {fmt_usd(s['volume_24h'])}")
         if s.get("liquidity_usd") not in (None, "", "null"):
             lines.append(f"• Liq: {fmt_usd(s['liquidity_usd'])}")
+        if s.get("market_cap") not in (None, "", "null"):
+            lines.append(f"• MC: {fmt_usd(s['market_cap'])}")
         tg_send(chat_id, "\n".join(lines), reply_to=msg_id)
         return jsonify({"ok": True})
 
