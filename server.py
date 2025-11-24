@@ -402,8 +402,13 @@ def get_cboost_live_data():
 # ------------------------
 
 def call_openai(question: str, context, mode: str = "tbp"):
+    # Debug: prüfen, ob Key vorhanden
+    print("DEBUG call_openai: mode =", mode)
+    print("DEBUG call_openai: OPENAI_API_KEY set =", bool(OPENAI_API_KEY))
+    print("DEBUG call_openai: OPENAI_MODEL =", OPENAI_MODEL)
+
     if not OPENAI_API_KEY:
-        # Kein API-Key hinterlegt → sofort abbrechen
+        print("DEBUG call_openai: NO OPENAI_API_KEY, aborting.")
         return None
 
     # System-Prompt je nach Modus wählen
@@ -466,22 +471,42 @@ RULES:
     ]
 
     try:
-        import openai
-        openai.api_key = OPENAI_API_KEY
+        # Versuche neuen OpenAI-Client (openai>=1.x)
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            print("DEBUG call_openai: using OpenAI client (chat.completions.create)")
+            resp = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=messages,
+                temperature=0.6,
+                max_tokens=400,
+            )
+            answer = resp.choices[0].message.content.strip()
+            print("DEBUG call_openai: got answer length =", len(answer))
+            return answer
 
-        response = openai.ChatCompletion.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-            temperature=0.6,
-            max_tokens=400,
-        )
-
-        answer = response["choices"][0]["message"]["content"].strip()
-        return answer
+        except ImportError:
+            # Fallback für alte Library (openai<1.x)
+            import openai
+            openai.api_key = OPENAI_API_KEY
+            print("DEBUG call_openai: using legacy openai.ChatCompletion.create")
+            resp = openai.ChatCompletion.create(
+                model=OPENAI_MODEL,
+                messages=messages,
+                temperature=0.6,
+                max_tokens=400,
+            )
+            answer = resp["choices"][0]["message"]["content"].strip()
+            print("DEBUG call_openai: got answer length =", len(answer))
+            return answer
 
     except Exception as e:
-        print("OpenAI error:", e)
+        import traceback
+        print("OpenAI error:", repr(e))
+        traceback.print_exc()
         return None
+
 
 
 def clean_answer(s: str) -> str:
