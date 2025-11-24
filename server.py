@@ -56,7 +56,6 @@ CIRC_SUPPLY = MAX_SUPPLY - BURNED - OWNER
 
 # ==== C-BOOST MARKET CONFIG (für Trades / Charts) ====
 CBOOST_NETWORK       = os.environ.get("CBOOST_NETWORK", "polygon_pos").strip() or "polygon_pos"
-# Optional: wenn du es lieber aus ENV ziehen willst, ansonsten nutzen wir CBOOST_PAIR
 CBOOST_POOL_ADDRESS  = os.environ.get("CBOOST_POOL_ADDRESS", CBOOST_PAIR).strip()
 
 # Memory / State
@@ -149,15 +148,11 @@ def _short_addr(addr: str, length: int = 6) -> str:
 
 def is_admin(user_id) -> bool:
     try:
-        return str(user_id) in ADMIN_USER_IDS if ADMIN_USER_IDS else True  # ohne ENV dürfen alle (Test)
+        return str(user_id) in ADMIN_USER_IDS if ADMIN_USER_IDS else True
     except Exception:
         return False
 
 def should_reply(chat_id: int) -> bool:
-    """
-    Entscheidet anhand von MEM['resp_mode'], ob die AI antworten soll.
-    '0' -> immer; '1' -> jede 3.; '2' -> jede 10.
-    """
     mode = MEM.get("resp_mode", "0")
     if mode == "0":
         return True
@@ -169,23 +164,12 @@ def should_reply(chat_id: int) -> bool:
         return (cnt % 10) == 0
     return True
 
-
 def _choose_token_for_chat(chat_id: int) -> str:
-    """
-    Wählt den richtigen Bot-Token je nach Chat.
-    - CBOOST_CHAT_ID -> C-Boost-Bot
-    - sonst TBP-Bot
-    """
     if CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID and TELEGRAM_TOKEN_CBOOST:
         return TELEGRAM_TOKEN_CBOOST
     return TELEGRAM_TOKEN_TBP
 
-
 def tg_send_any(chat_id, text, reply_to=None, preview=True):
-    """
-    Sende eine Nachricht mit ALLEN konfigurierten Bot-Tokens.
-    So funktioniert /id auch, bevor CBOOST_CHAT_ID gesetzt ist.
-    """
     tokens = [t for t in (TELEGRAM_TOKEN_TBP, TELEGRAM_TOKEN_CBOOST) if t]
     for token in tokens:
         try:
@@ -204,7 +188,6 @@ def tg_send_any(chat_id, text, reply_to=None, preview=True):
             )
         except Exception:
             continue
-
 
 def tg_send(chat_id, text, reply_to=None, preview=True):
     token = _choose_token_for_chat(chat_id)
@@ -227,7 +210,6 @@ def tg_send(chat_id, text, reply_to=None, preview=True):
     except Exception:
         pass
 
-
 def tg_buttons(chat_id, text, buttons):
     token = _choose_token_for_chat(chat_id)
     if not token:
@@ -247,11 +229,7 @@ def tg_buttons(chat_id, text, buttons):
     except Exception:
         pass
 
-
 def tg_send_photo(chat_id, photo_url, caption=None, reply_to=None):
-    """
-    Sendet ein Foto (z.B. TBP / C-Boost Logo) mit optionaler Caption.
-    """
     token = _choose_token_for_chat(chat_id)
     if not token or not photo_url:
         if caption:
@@ -276,11 +254,7 @@ def tg_send_photo(chat_id, photo_url, caption=None, reply_to=None):
         if caption:
             tg_send(chat_id, caption, reply_to=reply_to, preview=True)
 
-
 def tg_delete_message(chat_id, message_id):
-    """
-    Löscht eine Nachricht (für Scam / Promo / Illegale Angebote).
-    """
     token = _choose_token_for_chat(chat_id)
     if not token:
         return
@@ -306,7 +280,6 @@ def is_listing_scam(text: str) -> bool:
         return True
     return False
 
-
 def is_external_promo(text: str) -> bool:
     t = text.lower()
     for pat in PROMO_PATTERNS:
@@ -316,11 +289,7 @@ def is_external_promo(text: str) -> bool:
         return True
     return False
 
-
 def is_illegal_offer(text: str) -> bool:
-    """
-    Erkennung von direkten illegalen Angeboten (Fake-Pässe, Drogen, Hacking-Services, gestohlene Daten).
-    """
     t = text.lower()
     for pat in ILLEGAL_OFFER_PATTERNS:
         if re.search(pat, t):
@@ -366,7 +335,6 @@ def get_live_price():
         pass
     return None
 
-
 def get_market_stats():
     try:
         r = requests.get(
@@ -386,10 +354,6 @@ def get_market_stats():
         return None
 
 def get_tbp_price_and_mc():
-    """
-    TBP Preis + Market Cap (Dexscreener).
-    Wird vom Buybot und teilweise vom /price-Command genutzt.
-    """
     try:
         r = requests.get(
             f"https://api.dexscreener.com/latest/dex/pairs/polygon/{TBP_PAIR}",
@@ -405,15 +369,11 @@ def get_tbp_price_and_mc():
         return None, None
 
 # -------------------------
-# Market Data (C-Boost) – Dexscreener (für Website & Bot)
+# Market Data (C-Boost)
 # -------------------------
 
 def get_cboost_live_data():
-    """
-    Holt Price / MarketCap / Volumen von DexScreener für die Website und den Bot.
-    """
-    pair = CBOOST_PAIR  # C-Boost Pair auf Polygon
-
+    pair = CBOOST_PAIR
     try:
         r = requests.get(
             f"https://api.dexscreener.com/latest/dex/pairs/polygon/{pair}",
@@ -428,24 +388,20 @@ def get_cboost_live_data():
         volume_24h = _safe_float((pair_data.get("volume", {}) or {}).get("h24") or pair_data.get("volume24h"))
 
         return {
-            "price": price,
+            "price":      price,
             "market_cap": mc,
             "volume_24h": volume_24h,
-            "chart_url": f"https://dexscreener.com/polygon/{pair}",
+            "chart_url":  f"https://dexscreener.com/polygon/{pair}",
         }
-
     except Exception as e:
         print(f"[CBOOST] Dexscreener error: {e}")
         return None
 
 # -------------------------
-# OpenAI (optional)
+# OpenAI
 # -------------------------
 
 def call_openai(question: str, context, mode: str = "tbp"):
-    """
-    mode = "tbp" oder "cboost"
-    """
     if not OPENAI_API_KEY:
         return None
 
@@ -498,7 +454,6 @@ def call_openai(question: str, context, mode: str = "tbp"):
     except Exception:
         return None
 
-
 def clean_answer(s: str) -> str:
     if not s:
         return ""
@@ -515,7 +470,6 @@ def autopost_needed():
     if not last:
         return True
     return (now - last) >= timedelta(hours=10)
-
 
 def autopost_text(lang="en"):
     p = get_live_price()
@@ -542,9 +496,7 @@ def autopost_text(lang="en"):
     ]
     return "\n".join(lines)
 
-
 def start_autopost_background(chat_id: int):
-    # Autopost nur für TBP-Chat, NICHT für C-Boost
     if CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID:
         return
 
@@ -587,9 +539,9 @@ def fetch_pool_trades(network: str, pool: str):
     """
     Holt die letzten Trades eines Pools von GeckoTerminal.
     Wir nutzen nur Buys innerhalb der letzten 24h.
-    Zusätzlich holen wir:
+    Zusätzlich:
       - token_amount  -> Menge TBP / C-Boost
-      - quote_amount  -> Menge POL (Quote-Token), soweit verfügbar
+      - quote_amount  -> Menge POL (Quote-Token)
     """
     if not network or not pool:
         return []
@@ -605,21 +557,19 @@ def fetch_pool_trades(network: str, pool: str):
             attrs = t.get("attributes", {}) or {}
             side = (attrs.get("trade_type") or attrs.get("side") or "").lower()
             tx_hash = attrs.get("tx_hash") or attrs.get("transaction_hash") or t.get("id")
-            wallet = attrs.get("tx_from_address") or attrs.get("from_address") or attrs.get("maker") or attrs.get("taker")
+            wallet  = attrs.get("tx_from_address") or attrs.get("from_address") or attrs.get("maker") or attrs.get("taker")
             usd = _safe_float(
                 attrs.get("volume_usd")
                 or attrs.get("amount_usd")
                 or attrs.get("amount_in_usd")
                 or attrs.get("amount_out_usd")
             )
-            # Menge des Base-Tokens (TBP / C-Boost)
             token_amount = _safe_float(
                 attrs.get("base_token_amount")
                 or attrs.get("token_amount")
                 or attrs.get("amount_out")
                 or attrs.get("amount_in")
             )
-            # Menge des Quote-Tokens (auf Polygon für dich relevant: POL)
             quote_amount = _safe_float(
                 attrs.get("quote_token_amount")
                 or attrs.get("other_token_amount")
@@ -637,14 +587,14 @@ def fetch_pool_trades(network: str, pool: str):
                 or attrs.get("price")
             )
             trades.append({
-                "side": side,
-                "tx_hash": tx_hash,
-                "wallet": wallet,
-                "usd": usd,
+                "side":         side,
+                "tx_hash":      tx_hash,
+                "wallet":       wallet,
+                "usd":          usd,
                 "token_amount": token_amount,
-                "quote_amount": quote_amount,  # NEU: POL-Menge
-                "timestamp": ts,
-                "price_usd": price,
+                "quote_amount": quote_amount,
+                "timestamp":    ts,
+                "price_usd":    price,
             })
         trades.sort(key=lambda x: x.get("timestamp") or 0)
         return trades
@@ -653,38 +603,54 @@ def fetch_pool_trades(network: str, pool: str):
         return []
 
 def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
-    usd = trade.get("usd")
+    usd          = trade.get("usd")
     token_amount = trade.get("token_amount")
-    pol_amount = trade.get("quote_amount")   # NEU: POL-Menge
-    wallet = trade.get("wallet")
-    tx_hash = trade.get("tx_hash")
+    pol_amount   = trade.get("quote_amount")
+    wallet       = trade.get("wallet")
+    tx_hash      = trade.get("tx_hash")
 
+    # Live-Daten nach dem Buy (Preis & MC)
     price_now, mc_now = get_tbp_price_and_mc()
-    price_txt = fmt_usd(price_now, 12) if price_now is not None else "N/A"
-    mc_txt    = fmt_usd(mc_now, 0) if mc_now is not None else "N/A"
+    stats   = get_market_stats() or {}
+    vol_24h = stats.get("volume_24h")
 
-    lines = [
-        "🐸 <b>New TBP Buy</b>",
-        "",
-        f"💰 Value: {fmt_usd(usd, 2) if usd is not None else 'N/A'}",
+    price_txt = fmt_usd(price_now, 12) if price_now is not None else "N/A"
+    mc_txt    = fmt_usd(mc_now, 0)     if mc_now  is not None else "N/A"
+    vol_txt   = fmt_usd(vol_24h, 2)    if vol_24h is not None else "N/A"
+    chart_url = LINKS["dexscreener"]
+
+    caption_lines = [
+        "🐸 <b>TBP Live Data – New Buy</b>\n",
+        f"💰 <b>Buy Value:</b> {fmt_usd(usd, 2) if usd is not None else 'N/A'}",
     ]
 
-    # POL-Menge pro Buy anzeigen, falls verfügbar
     if pol_amount is not None:
-        lines.append(f"⛽ POL used: {pol_amount:.4f} POL")
+        caption_lines.append(f"⛽ <b>POL used:</b> {pol_amount:.4f} POL")
 
-    lines.append(f"🪙 Amount: {token_amount:.4f} TBP" if token_amount is not None else "🪙 Amount: N/A")
-    lines.append(f"📈 Price (after): {price_txt}")
-    lines.append(f"🏦 MC: {mc_txt}")
+    caption_lines.append(
+        f"🪙 <b>Amount:</b> {token_amount:.4f} TBP" if token_amount is not None else "🪙 <b>Amount:</b> N/A"
+    )
+
+    caption_lines.extend([
+        "",
+        f"💵 <b>Price (after):</b> {price_txt}",
+        f"🏦 <b>Market Cap:</b> {mc_txt}",
+        f"📊 <b>24h Volume:</b> {vol_txt}",
+    ])
 
     if wallet:
         new_tag = " (NEW)" if is_new else ""
-        lines.append(f"👛 Wallet: <code>{_short_addr(wallet)}</code>{new_tag}")
+        caption_lines.append(f"👛 <b>Wallet:</b> <code>{_short_addr(wallet)}</code>{new_tag}")
 
     if tx_hash:
-        lines.append(f"🔗 <a href=\"https://polygonscan.com/tx/{tx_hash}\">View on PolygonScan</a>")
+        caption_lines.append(
+            f"🔗 <a href=\"https://polygonscan.com/tx/{tx_hash}\">View on PolygonScan</a>"
+        )
 
-    caption = "\n".join(lines)
+    if chart_url:
+        caption_lines.append(f"\n📈 <a href=\"{chart_url}\">Open Live Chart</a>")
+
+    caption = "\n".join(caption_lines)
     logo = TBP_LOGO_URL
     if logo:
         tg_send_photo(chat_id, logo, caption=caption)
@@ -692,40 +658,54 @@ def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
         tg_send(chat_id, caption, preview=True)
 
 def send_cboost_buy_alert(chat_id: int, trade: dict, is_new: bool):
-    usd = trade.get("usd")
+    usd          = trade.get("usd")
     token_amount = trade.get("token_amount")
-    pol_amount = trade.get("quote_amount")   # NEU: POL-Menge auch für C-Boost
-    wallet = trade.get("wallet")
-    tx_hash = trade.get("tx_hash")
+    pol_amount   = trade.get("quote_amount")
+    wallet       = trade.get("wallet")
+    tx_hash      = trade.get("tx_hash")
 
-    data = get_cboost_live_data() or {}
+    data      = get_cboost_live_data() or {}
     price_now = data.get("price")
     mc_now    = data.get("market_cap")
+    vol_now   = data.get("volume_24h")
+    chart_url = data.get("chart_url")
 
     price_txt = fmt_usd(price_now, 10) if price_now is not None else "N/A"
-    mc_txt    = fmt_usd(mc_now, 0) if mc_now is not None else "N/A"
+    mc_txt    = fmt_usd(mc_now, 2)     if mc_now  is not None else "N/A"
+    vol_txt   = fmt_usd(vol_now, 2)    if vol_now is not None else "N/A"
 
-    lines = [
-        "⚡ <b>New C-Boost Buy</b>",
-        "",
-        f"💰 Value: {fmt_usd(usd, 2) if usd is not None else 'N/A'}",
+    caption_lines = [
+        "⚡ <b>C-Boost Live Data – New Buy</b>\n",
+        f"💰 <b>Buy Value:</b> {fmt_usd(usd, 2) if usd is not None else 'N/A'}",
     ]
 
     if pol_amount is not None:
-        lines.append(f"⛽ POL used: {pol_amount:.4f} POL")
+        caption_lines.append(f"⛽ <b>POL used:</b> {pol_amount:.4f} POL")
 
-    lines.append(f"🪙 Amount: {token_amount:.4f} C-Boost" if token_amount is not None else "🪙 Amount: N/A")
-    lines.append(f"📈 Price (after): {price_txt}")
-    lines.append(f"🏦 MC: {mc_txt}")
+    caption_lines.append(
+        f"🪙 <b>Amount:</b> {token_amount:.4f} C-Boost" if token_amount is not None else "🪙 <b>Amount:</b> N/A"
+    )
+
+    caption_lines.extend([
+        "",
+        f"💵 <b>Price (after):</b> {price_txt}",
+        f"🏦 <b>Market Cap:</b> {mc_txt}",
+        f"📊 <b>24h Volume:</b> {vol_txt}",
+    ])
 
     if wallet:
         new_tag = " (NEW)" if is_new else ""
-        lines.append(f"👛 Wallet: <code>{_short_addr(wallet)}</code>{new_tag}")
+        caption_lines.append(f"👛 <b>Wallet:</b> <code>{_short_addr(wallet)}</code>{new_tag}")
 
     if tx_hash:
-        lines.append(f"🔗 <a href=\"https://polygonscan.com/tx/{tx_hash}\">View on PolygonScan</a>")
+        caption_lines.append(
+            f"🔗 <a href=\"https://polygonscan.com/tx/{tx_hash}\">View on PolygonScan</a>"
+        )
 
-    caption = "\n".join(lines)
+    if chart_url:
+        caption_lines.append(f"\n📈 <a href=\"{chart_url}\">Open Live Chart</a>")
+
+    caption = "\n".join(caption_lines)
     logo = CBOOST_LOGO_URL
     if logo:
         tg_send_photo(chat_id, logo, caption=caption)
@@ -733,9 +713,6 @@ def send_cboost_buy_alert(chat_id: int, trade: dict, is_new: bool):
         tg_send(chat_id, caption, preview=True)
 
 def process_buybot_for(token_key: str, chat_id: int):
-    """
-    Holt neue Trades für TBP oder C-Boost und sendet Buys >= 5$.
-    """
     cfg = TOKEN_BUYBOT.get(token_key)
     if not cfg:
         return
@@ -750,13 +727,11 @@ def process_buybot_for(token_key: str, chat_id: int):
     if not hashes:
         return
 
-    # Erstes Setup: nur Sync, keine alten Buys posten
     if not last_hash:
         state["last_hash"] = hashes[-1]
         return
 
     if last_hash not in hashes:
-        # zu alt, einfach resync ohne Spam
         state["last_hash"] = hashes[-1]
         return
 
@@ -789,23 +764,17 @@ def process_buybot_for(token_key: str, chat_id: int):
     state["last_hash"] = hashes[-1]
 
 def start_buybot_background():
-    """
-    Startet einen Hintergrund-Thread, der TBP & C-Boost Pools regelmäßig pollt
-    und Buy-Alerts in die jeweiligen Chats sendet.
-    """
     def loop():
         while True:
             try:
-                # TBP Chat: der erste Nicht-C-Boost-Chat, in dem der Bot läuft
                 tbp_chat = MEM.get("tbp_chat_id")
                 if tbp_chat:
                     process_buybot_for("tbp", tbp_chat)
-                # C-Boost Chat: feste Chat-ID aus ENV
                 if CBOOST_CHAT_ID:
                     process_buybot_for("cboost", CBOOST_CHAT_ID)
             except Exception as e:
                 print(f"[BUYBOT] loop error: {e}")
-            time.sleep(25)   # Poll-Intervall (Sekunden)
+            time.sleep(25)
     threading.Thread(target=loop, daemon=True).start()
 
 # =========================
@@ -820,7 +789,6 @@ def root():
 def health():
     return jsonify({"ok": True})
 
-# Admin: Webhook setzen
 @app.route("/admin/set_webhook")
 def admin_set_webhook():
     key = request.args.get("key", "")
@@ -848,7 +816,7 @@ def admin_set_webhook():
 
     return jsonify({"ok": True, "responses": results})
 
-# Web-AI für deine TBP-Webseite
+# Web-AI für TBP-Webseite
 @app.route("/ask", methods=["POST"])
 def ask():
     data = request.json or {}
@@ -879,8 +847,7 @@ def ask():
     MEM["ctx"] = MEM["ctx"][-10:]
     return jsonify({"answer": ans})
 
-
-# Web-AI für die C-Boost Website
+# Web-AI für C-Boost Website
 @app.route("/ask_cboost", methods=["POST"])
 def ask_cboost():
     data = request.json or {}
@@ -896,33 +863,25 @@ def ask_cboost():
     MEM["ctx"] = MEM["ctx"][-10:]
     return jsonify({"answer": ans})
 
-# =========================
-# C-Boost PRICE API für Website
-# =========================
-
+# C-Boost PRICE API
 @app.route("/cboost_price", methods=["GET"])
 def cboost_price():
-    """
-    API für die C-Boost Webseite.
-    Gibt Price, Market Cap, Volume zurück.
-    """
     data = get_cboost_live_data()
     if not data:
         return jsonify({"ok": False, "error": "no_data"}), 200
 
     return jsonify({
         "ok": True,
-        "price": data["price"],
+        "price":      data["price"],
         "market_cap": data["market_cap"],
         "volume_24h": data["volume_24h"],
-        "chart_url": data["chart_url"]
+        "chart_url":  data["chart_url"]
     })
 
 # =========================
 # TELEGRAM
 # =========================
 
-# Unterschiedliche Bild-Reaktionen für TBP & C-Boost
 MEME_CAPTIONS_TBP = [
     "Nice photo! Want me to spin a TBP meme from it? 🐸✨",
     "Fresh pixels detected. Should I add TurboPepe energy? ⚡",
@@ -937,11 +896,9 @@ MEME_CAPTIONS_CBOOST = [
 
 @app.route("/telegram", methods=["GET", "POST"])
 def telegram_webhook():
-    # GET → sichtbar, hilft beim Debuggen
     if request.method == "GET":
         return jsonify({"ok": True, "route": "telegram"}), 200
 
-    # ---- Update parsen ----
     update  = request.json or {}
     msg     = update.get("message", {}) or {}
     chat    = msg.get("chat", {}) or {}
@@ -955,19 +912,16 @@ def telegram_webhook():
     if not chat_id:
         return jsonify({"ok": True})
 
-    # Flag: sind wir im C-Boost-Chat?
     is_cboost_chat = bool(CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID)
 
-    # TBP Chat-ID merken (für Buybot)
     if not is_cboost_chat and MEM.get("tbp_chat_id") is None:
         MEM["tbp_chat_id"] = chat_id
 
-    # Neue Mitglieder personalisiert begrüßen (TBP vs. C-Boost)
     if new_members:
         for member in new_members:
             first_name = member.get("first_name") or ""
-            username = member.get("username")
-            display = f"@{username}" if username else first_name or "friend"
+            username   = member.get("username")
+            display    = f"@{username}" if username else first_name or "friend"
 
             if is_cboost_chat:
                 welcome_text = (
@@ -993,7 +947,6 @@ def telegram_webhook():
         if not text:
             return jsonify({"ok": True})
 
-    # Autopost-Thread einmalig starten (nur für TBP-Chat)
     try:
         if MEM.get("_autopost_started") != True and not is_cboost_chat:
             start_autopost_background(chat_id)
@@ -1001,7 +954,6 @@ def telegram_webhook():
     except Exception:
         pass
 
-    # Buybot-Thread einmalig starten (für TBP & C-Boost)
     try:
         if MEM.get("_buybot_started") != True:
             start_buybot_background()
@@ -1009,12 +961,8 @@ def telegram_webhook():
     except Exception:
         pass
 
-    # Foto → getrennte Caption-Listen
     if "photo" in msg:
-        if is_cboost_chat:
-            caption = random.choice(MEME_CAPTIONS_CBOOST)
-        else:
-            caption = random.choice(MEME_CAPTIONS_TBP)
+        caption = random.choice(MEME_CAPTIONS_CBOOST if is_cboost_chat else MEME_CAPTIONS_TBP)
         tg_send(chat_id, caption, reply_to=msg_id)
         MEM["chat_count"] += 1
         return jsonify({"ok": True})
@@ -1026,7 +974,7 @@ def telegram_webhook():
     lang = "de" if is_de(text) else "en"
     MEM["chat_count"] += 1
 
-    # ---- Admin-Response-Rate /0 /1 /2 /mode ----
+    # Reply mode
     if low.startswith("/0") or low.startswith("/1") or low.startswith("/2") or low.startswith("/mode"):
         if low.startswith("/mode"):
             mode_label = {"0": "all", "1": "every 3rd", "2": "every 10th"}.get(MEM.get("resp_mode", "0"), "all")
@@ -1051,7 +999,6 @@ def telegram_webhook():
             tg_send(chat_id, "Reply mode set to: EVERY 10th message.", reply_to=msg_id, preview=False)
             return jsonify({"ok": True})
 
-    # ----- Commands -----
     if low.startswith("/start"):
         if is_cboost_chat:
             tg_send(
@@ -1080,7 +1027,6 @@ def telegram_webhook():
         tg_send(chat_id, "/price • /stats • /chart • /links • /rules • /security • /id", reply_to=msg_id, preview=False)
         return jsonify({"ok": True})
 
-    # Sicherheits-Regeln anzeigen
     if low.startswith("/rules") or low.startswith("/security"):
         if is_cboost_chat:
             rules_text = (
@@ -1115,7 +1061,6 @@ def telegram_webhook():
         tg_send(chat_id, rules_text, reply_to=msg_id)
         return jsonify({"ok": True})
 
-    # Chat-ID anzeigen
     if low.startswith("/id"):
         tg_send_any(chat_id, f"Chat ID: <code>{chat_id}</code>", reply_to=msg_id, preview=False)
         return jsonify({"ok": True})
@@ -1139,9 +1084,8 @@ def telegram_webhook():
         )
         return jsonify({"ok": True})
 
-    # ==== PRICE / CHART – TBP & C-BOOST ====
+    # PRICE / CHART
     if low.startswith("/price") or (not low.startswith("/") and WORD_PRICE.search(low)):
-        # C-Boost Chat → C-Boost Live-Daten + Logo
         if is_cboost_chat:
             data = get_cboost_live_data()
             if not data:
@@ -1174,7 +1118,6 @@ def telegram_webhook():
             tg_send_photo(chat_id, CBOOST_LOGO_URL, caption=caption, reply_to=msg_id)
             return jsonify({"ok": True})
 
-        # TBP Standard-Flow
         p = get_live_price()
         s = get_market_stats() or {}
         lines = []
@@ -1247,14 +1190,13 @@ def telegram_webhook():
                     ),
                     reply_to=msg_id
                 )
-                return jsonify({"ok": True})
-
-            txt = say(
-                lang,
-                f"📊 C-Boost Live-Chart:\n{chart}",
-                f"📊 C-Boost live chart:\n{chart}",
-            )
-            tg_send(chat_id, txt, reply_to=msg_id)
+            else:
+                txt = say(
+                    lang,
+                    f"📊 C-Boost Live-Chart:\n{chart}",
+                    f"📊 C-Boost live chart:\n{chart}",
+                )
+                tg_send(chat_id, txt, reply_to=msg_id)
             return jsonify({"ok": True})
 
         tg_buttons(
@@ -1264,8 +1206,8 @@ def telegram_webhook():
         )
         return jsonify({"ok": True})
 
-    # ---- Single-Word Trigger „raid.“ ----
-    if text.strip().lower() == "raid.":  # nur genau "raid."
+    # RAID Trigger nur auf "raid."
+    if text.strip().lower() == "raid.":
         if is_cboost_chat:
             reply_txt = say(
                 lang,
@@ -1281,7 +1223,7 @@ def telegram_webhook():
         tg_send(chat_id, reply_txt, reply_to=msg_id)
         return jsonify({"ok": True})
 
-    # --- Automatische Info: alle 25 Chats (nur TBP-Chat)
+    # Autopost
     try:
         if MEM["chat_count"] >= 25 and not is_cboost_chat:
             tg_send(chat_id, autopost_text("en"))
@@ -1290,25 +1232,21 @@ def telegram_webhook():
     except Exception:
         pass
 
-    # --- AI Security Filter ---
+    # AI Security Filter
     if not low.startswith("/") and not is_admin(user_id):
         if is_illegal_offer(low):
             tg_delete_message(chat_id, msg_id)
             if is_cboost_chat:
                 warn = say(
                     lang,
-                    "⚠️ Illegale Angebote (Fake-Pässe, Drogen, Hacking-Services, gestohlene Daten usw.) sind in dieser C-Boost Gruppe strikt verboten. "
-                    "Deine Nachricht wurde entfernt.",
-                    "⚠️ Illegal offers (fake IDs, drugs, hacking services, stolen data, etc.) are strictly forbidden in this C-Boost group. "
-                    "Your message has been removed."
+                    "⚠️ Illegale Angebote (Fake-Pässe, Drogen, Hacking-Services, gestohlene Daten usw.) sind in dieser C-Boost Gruppe strikt verboten. Deine Nachricht wurde entfernt.",
+                    "⚠️ Illegal offers (fake IDs, drugs, hacking services, stolen data, etc.) are strictly forbidden in this C-Boost group. Your message has been removed."
                 )
             else:
                 warn = say(
                     lang,
-                    "⚠️ Illegale Angebote (Fake-Pässe, Drogen, Hacking-Services, gestohlene Daten usw.) sind in diesem TBP-Chat strikt verboten. "
-                    "Deine Nachricht wurde entfernt.",
-                    "⚠️ Illegal offers (fake IDs, drugs, hacking services, stolen data, etc.) are strictly forbidden in this TBP chat. "
-                    "Your message has been removed."
+                    "⚠️ Illegale Angebote (Fake-Pässe, Drogen, Hacking-Services, gestohlene Daten usw.) sind in diesem TBP-Chat strikt verboten. Deine Nachricht wurde entfernt.",
+                    "⚠️ Illegal offers (fake IDs, drugs, hacking services, stolen data, etc.) are strictly forbidden in this TBP chat. Your message has been removed."
                 )
             tg_send(chat_id, warn)
             return jsonify({"ok": True})
@@ -1318,18 +1256,14 @@ def telegram_webhook():
             if is_cboost_chat:
                 warn = say(
                     lang,
-                    "⚠️ Angebote für bezahlte Listings / Fast-Track auf CMC sind in dieser C-Boost Gruppe nicht erlaubt. "
-                    "C-Boost setzt auf Transparenz und organisches Wachstum.",
-                    "⚠️ Paid listing / fast-track offers for CMC are not allowed in this C-Boost group. "
-                    "C-Boost focuses on transparency and organic growth."
+                    "⚠️ Angebote für bezahlte Listings / Fast-Track auf CMC sind in dieser C-Boost Gruppe nicht erlaubt. C-Boost setzt auf Transparenz und organisches Wachstum.",
+                    "⚠️ Paid listing / fast-track offers for CMC are not allowed in this C-Boost group. C-Boost focuses on transparency and organic growth."
                 )
             else:
                 warn = say(
                     lang,
-                    "⚠️ Angebote für bezahlte Listings / Fast-Track auf CMC sind in diesem Chat nicht erlaubt. "
-                    "TBP setzt auf Transparenz und organisches Wachstum.",
-                    "⚠️ Paid listing / fast-track offers for CMC are not allowed in this chat. "
-                    "TBP focuses on transparency and organic growth."
+                    "⚠️ Angebote für bezahlte Listings / Fast-Track auf CMC sind in diesem Chat nicht erlaubt. TBP setzt auf Transparenz und organisches Wachstum.",
+                    "⚠️ Paid listing / fast-track offers for CMC are not allowed in this chat. TBP focuses on transparency and organic growth."
                 )
             tg_send(chat_id, warn)
             return jsonify({"ok": True})
@@ -1339,28 +1273,23 @@ def telegram_webhook():
             if is_cboost_chat:
                 warn = say(
                     lang,
-                    "⚠️ Externe Marketing- oder Promo-Angebote für andere Tokens / Projekte sind hier nicht erlaubt. "
-                    "Dieser Chat ist nur für C-Boost.",
-                    "⚠️ External marketing or promo offers for other tokens / projects are not allowed here. "
-                    "This chat is only for C-Boost."
+                    "⚠️ Externe Marketing- oder Promo-Angebote für andere Tokens / Projekte sind hier nicht erlaubt. Dieser Chat ist nur für C-Boost.",
+                    "⚠️ External marketing or promo offers for other tokens / projects are not allowed here. This chat is only for C-Boost."
                 )
             else:
                 warn = say(
                     lang,
-                    "⚠️ Externe Marketing- oder Promo-Angebote für andere Tokens / Projekte sind hier nicht erlaubt. "
-                    "Dieser Chat ist nur für TurboPepe-AI (TBP).",
-                    "⚠️ External marketing or promo offers for other tokens / projects are not allowed here. "
-                    "This chat is only for TurboPepe-AI (TBP)."
+                    "⚠️ Externe Marketing- oder Promo-Angebote für andere Tokens / Projekte sind hier nicht erlaubt. Dieser Chat ist nur für TurboPepe-AI (TBP).",
+                    "⚠️ External marketing or promo offers for other tokens / projects are not allowed here. This chat is only for TurboPepe-AI (TBP)."
                 )
             tg_send(chat_id, warn)
             return jsonify({"ok": True})
 
-    # --- Throttle: nur freie Nachrichten drosseln (Commands immer zulassen) ---
+    # Throttle nur auf freie Messages
     if not low.startswith("/"):
         if not should_reply(chat_id):
             return jsonify({"ok": True})
 
-    # --- Normal AI Flow ---
     mode = "cboost" if is_cboost_chat else "tbp"
     raw = call_openai(text, MEM["ctx"], mode=mode)
     if not raw:
