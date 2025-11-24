@@ -403,6 +403,7 @@ def get_cboost_live_data():
 
 def call_openai(question: str, context, mode: str = "tbp"):
     if not OPENAI_API_KEY:
+        # Kein API-Key hinterlegt → sofort abbrechen
         return None
 
     # System-Prompt je nach Modus wählen
@@ -461,7 +462,7 @@ RULES:
     # Nachrichten für OpenAI bauen
     messages = [
         {"role": "system", "content": system_msg},
-        {"role": "user", "content": question}
+        {"role": "user", "content": question},
     ]
 
     try:
@@ -472,7 +473,7 @@ RULES:
             model=OPENAI_MODEL,
             messages=messages,
             temperature=0.6,
-            max_tokens=400
+            max_tokens=400,
         )
 
         answer = response["choices"][0]["message"]["content"].strip()
@@ -481,6 +482,7 @@ RULES:
     except Exception as e:
         print("OpenAI error:", e)
         return None
+
 
 def clean_answer(s: str) -> str:
     if not s:
