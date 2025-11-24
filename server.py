@@ -535,72 +535,32 @@ TOKEN_BUYBOT = {
     },
 }
 
-def fetch_pool_trades(network: str, pool: str):
-    """
-    Holt die letzten Trades eines Pools von GeckoTerminal.
-    Wir nutzen nur Buys innerhalb der letzten 24h.
-    Zusätzlich:
-      - token_amount  -> Menge TBP / C-Boost
-      - quote_amount  -> Menge POL (Quote-Token)
-    """
-    if not network or not pool:
-        return []
+side = (
+    attrs.get("trade_type")
+    or attrs.get("side")
+    or attrs.get("taker_type")
+    or attrs.get("direction")
+    or ""
+).lower()
 
-    url = f"https://api.geckoterminal.com/api/v2/networks/{network}/pools/{pool}/trades"
-    try:
-        r = requests.get(url, timeout=8)
-        r.raise_for_status()
-        j = r.json()
-        data = j.get("data", []) or []
-        trades = []
-        for t in data:
-            attrs = t.get("attributes", {}) or {}
-            side = (attrs.get("trade_type") or attrs.get("side") or "").lower()
-            tx_hash = attrs.get("tx_hash") or attrs.get("transaction_hash") or t.get("id")
-            wallet  = attrs.get("tx_from_address") or attrs.get("from_address") or attrs.get("maker") or attrs.get("taker")
-            usd = _safe_float(
-                attrs.get("volume_usd")
-                or attrs.get("amount_usd")
-                or attrs.get("amount_in_usd")
-                or attrs.get("amount_out_usd")
-            )
-            token_amount = _safe_float(
-                attrs.get("base_token_amount")
-                or attrs.get("token_amount")
-                or attrs.get("amount_out")
-                or attrs.get("amount_in")
-            )
-            quote_amount = _safe_float(
-                attrs.get("quote_token_amount")
-                or attrs.get("other_token_amount")
-                or attrs.get("amount_in")
-                or attrs.get("amount_out")
-            )
-            ts = attrs.get("timestamp") or attrs.get("block_timestamp") or 0
-            try:
-                ts = int(ts)
-            except Exception:
-                ts = 0
-            price = _safe_float(
-                attrs.get("price_usd")
-                or attrs.get("token_price_usd")
-                or attrs.get("price")
-            )
-            trades.append({
-                "side":         side,
-                "tx_hash":      tx_hash,
-                "wallet":       wallet,
-                "usd":          usd,
-                "token_amount": token_amount,
-                "quote_amount": quote_amount,
-                "timestamp":    ts,
-                "price_usd":    price,
-            })
-        trades.sort(key=lambda x: x.get("timestamp") or 0)
-        return trades
-    except Exception as e:
-        print(f"[BUYBOT] trades error {network}/{pool}: {e}")
-        return []
+# --- BUY detection fallback ---
+# GeckoTerminal liefert manchmal KEIN 'side'
+# → Aber base_token_amount > 0 bedeutet IMMER BUY
+base_amount = _safe_float(
+    attrs.get("base_token_amount")
+    or attrs.get("token_amount")
+    or attrs.get("amount_out")
+)
+quote_amount = _safe_float(
+    attrs.get("quote_amount")
+    or attrs.get("amount_in")
+)
+
+if not side:
+    if base_amount and base_amount > 0:
+        side = "buy"
+    elif quote_amount and quote_amount > 0:
+        side = "sell"
 
 def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
     usd          = trade.get("usd")
