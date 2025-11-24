@@ -535,32 +535,32 @@ TOKEN_BUYBOT = {
     },
 }
 
-   side = (
-       attrs.get("trade_type")
-       or attrs.get("side")
-       or attrs.get("taker_type")
-       or attrs.get("direction")
-       or ""
-   ).lower()
+    side = (
+        attrs.get("trade_type")
+        or attrs.get("side")
+        or attrs.get("taker_type")
+        or attrs.get("direction")
+        or ""
+    ).lower()
 
 # --- BUY detection fallback ---
 # GeckoTerminal liefert manchmal KEIN 'side'
 # → Aber base_token_amount > 0 bedeutet IMMER BUY
-   base_amount = _safe_float(
-       attrs.get("base_token_amount")
-       or attrs.get("token_amount")
-       or attrs.get("amount_out")
-   )
-   quote_amount = _safe_float(
-       attrs.get("quote_amount")
-       or attrs.get("amount_in")
-   )
+    base_amount = _safe_float(
+        attrs.get("base_token_amount")
+        or attrs.get("token_amount")
+        or attrs.get("amount_out")
+    )
+    quote_amount = _safe_float(
+        attrs.get("quote_amount")
+        or attrs.get("amount_in")
+    )
 
-   if not side:
-       if base_amount and base_amount > 0:
-           side = "buy"
-       elif quote_amount and quote_amount > 0:
-           side = "sell"
+    if not side:
+        if base_amount and base_amount > 0:
+            side = "buy"
+        elif quote_amount and quote_amount > 0:
+            side = "sell"
 
 def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
     usd          = trade.get("usd")
