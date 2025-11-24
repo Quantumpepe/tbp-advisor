@@ -74,6 +74,9 @@ MEM = {
         "cboost":{"last_hash": None, "known_wallets": set()},
     },
     "tbp_chat_id": None,        # wird beim ersten TBP-Chat gesetzt
+    # Idle-Tracking pro Chat
+    "last_activity": {},        # chat_id -> datetime
+    "last_idle": {},            # chat_id -> datetime (letzte Idle-Nachricht)
 }
 
 # Regexe
@@ -580,7 +583,7 @@ TOKEN_BUYBOT = {
         "symbol": "TBP",
         "name": "TurboPepe-AI",
         "logo_url": TBP_LOGO_URL,
-        "min_usd": 3.0,                 # Mindest-Buy in USD
+        "min_usd": float(os.environ.get("TBP_MIN_BUY_USD", "3.0")),  # Mindest-Buy in USD
         "token_contract": TBP_CONTRACT.lower(),
     },
     "cboost": {
@@ -589,7 +592,7 @@ TOKEN_BUYBOT = {
         "symbol": "C-Boost",
         "name": "C-Boost",
         "logo_url": CBOOST_LOGO_URL,
-        "min_usd": 3.0,
+        "min_usd": float(os.environ.get("CBOOST_MIN_BUY_USD", "3.0")),
         "token_contract": CBOOST_CONTRACT,   # kann leer sein, dann wird nur 'kind' benutzt
     },
 }
@@ -901,6 +904,64 @@ def start_buybot_background():
     threading.Thread(target=loop, daemon=True).start()
 
 # =========================
+# IDLE WATCHDOG – lebendiger Chat
+# =========================
+
+# Nur englische Sprüche, wie gewünscht
+IDLE_MESSAGES_TBP = [
+    "Hello TBP crew, did you all fall asleep? We still have a moon to reach 🐸🚀",
+    "It’s getting quiet… should I start buying TBP myself? 👀",
+    "Reminder: you can sleep and work later – first we ride together to the moon with TBP! 🌕🔥",
+    "Silence detected. Maybe it’s time for a fresh TBP meme? 😎",
+]
+
+IDLE_MESSAGES_CBOOST = [
+    "C-Boost army, where is everybody? I’m boosting alone here ⚡😂",
+    "Too quiet… did you all mute the chart? Let’s wake it up! 📈🚀",
+    "Work and sleep can wait – first we push C-Boost closer to the moon! ⚡🌕",
+    "Silence mode off, boost mode on. Drop a meme or a question! 😉",
+]
+
+def start_idle_watchdog_background():
+    """
+    Prüft regelmäßig, ob ein Chat länger ruhig war.
+    - wenn > 10 Minuten keine Aktivität
+    - und seit der letzten Idle-Nachricht > 60 Minuten
+    → sendet einen zufälligen Idle-Spruch (TBP oder C-Boost abhängig vom Chat).
+    """
+    def loop():
+        while True:
+            try:
+                now = datetime.utcnow()
+                last_activity = MEM.get("last_activity", {})
+                last_idle = MEM.get("last_idle", {})
+
+                for chat_id, last in list(last_activity.items()):
+                    if not chat_id or not isinstance(last, datetime):
+                        continue
+
+                    diff = (now - last).total_seconds()
+                    prev_idle_time = last_idle.get(chat_id)
+                    idle_diff = (now - prev_idle_time).total_seconds() if prev_idle_time else 999999
+
+                    # > 600 Sekunden (10 Min) ruhig, und letzte Idle-Nachricht > 3600 Sekunden her
+                    if diff > 600 and idle_diff > 3600:
+                        if CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID:
+                            msg = random.choice(IDLE_MESSAGES_CBOOST)
+                        else:
+                            msg = random.choice(IDLE_MESSAGES_TBP)
+
+                        tg_send(chat_id, msg)
+                        MEM["last_idle"][chat_id] = now
+
+            except Exception as e:
+                print("[IDLE] loop error:", e)
+
+            time.sleep(30)
+
+    threading.Thread(target=loop, daemon=True).start()
+
+# =========================
 # FLASK WEB (health/ask/admin)
 # =========================
 
@@ -1017,56 +1078,12 @@ MEME_CAPTIONS_CBOOST = [
     "C-Boost mode: ON. Need a spicy caption? 😏",
 ]
 
-# ============================================
-# IDLE / BORED BOT SYSTEM
-# ============================================
-
-IDLE_MESSAGES = [
-    "Hello? Anybody alive here? 👀 It's getting too quiet…",
-    "Guys… I’m bored. Someone say something before I start talking to myself 😭",
-    "Wake up team! We can sleep later — first we go to the moon! 🌕🚀",
-    "Silence detected… initiating boredom protocol 🤖💤",
-    "If everyone is sleeping, I’ll start drinking coffee alone ☕😔",
-]
-
-LAST_CHAT_ACTIVITY = datetime.utcnow()
-
-def idle_watchdog():
-    global LAST_CHAT_ACTIVITY
-    while True:
-        try:
-            now = datetime.utcnow()
-            diff = (now - LAST_CHAT_ACTIVITY).total_seconds()
-
-            # Nach 5 Minuten ohne Nachrichten → Idle-Spruch
-            if diff > 300:
-                tbp_chat = MEM.get("tbp_chat_id")
-                if tbp_chat:
-                    msg = random.choice(IDLE_MESSAGES)
-                    tg_send(tbp_chat, msg)
-                    LAST_CHAT_ACTIVITY = datetime.utcnow()
-
-        except Exception as e:
-            print("Idle watchdog error:", e)
-
-        time.sleep(20)  # alle 20 Sekunden prüfen
-
-# Idle-System starten (nur einmal)
-if MEM.get("_idle_started") != True:
-    threading.Thread(target=idle_watchdog, daemon=True).start()
-    MEM["_idle_started"] = True
-
 @app.route("/telegram", methods=["GET", "POST"])
 def telegram_webhook():
     if request.method == "GET":
         return jsonify({"ok": True, "route": "telegram"}), 200
 
     update  = request.json or {}
-
-    # jede neue Nachricht (oder Update) zählt als Aktivität
-    global LAST_CHAT_ACTIVITY
-    LAST_CHAT_ACTIVITY = datetime.utcnow()
-
     msg     = update.get("message", {}) or {}
     chat    = msg.get("chat", {}) or {}
     chat_id = chat.get("id")
@@ -1078,6 +1095,12 @@ def telegram_webhook():
 
     if not chat_id:
         return jsonify({"ok": True})
+
+    # Letzte Aktivität für diesen Chat updaten
+    try:
+        MEM["last_activity"][chat_id] = datetime.utcnow()
+    except Exception:
+        pass
 
     is_cboost_chat = bool(CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID)
 
@@ -1114,6 +1137,7 @@ def telegram_webhook():
         if not text:
             return jsonify({"ok": True})
 
+    # Hintergrund-Threads starten (Autopost, Buybot, Idle)
     try:
         if MEM.get("_autopost_started") != True and not is_cboost_chat:
             start_autopost_background(chat_id)
@@ -1125,6 +1149,13 @@ def telegram_webhook():
         if MEM.get("_buybot_started") != True:
             start_buybot_background()
             MEM["_buybot_started"] = True
+    except Exception:
+        pass
+
+    try:
+        if MEM.get("_idle_started") != True:
+            start_idle_watchdog_background()
+            MEM["_idle_started"] = True
     except Exception:
         pass
 
