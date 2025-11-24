@@ -523,7 +523,7 @@ TOKEN_BUYBOT = {
         "symbol": "TBP",
         "name": "TurboPepe-AI",
         "logo_url": TBP_LOGO_URL,
-        "min_usd": 5.0,
+        "min_usd": 3.0,
     },
     "cboost": {
         "network": CBOOST_NETWORK or "polygon_pos",
@@ -531,7 +531,7 @@ TOKEN_BUYBOT = {
         "symbol": "C-Boost",
         "name": "C-Boost",
         "logo_url": CBOOST_LOGO_URL,
-        "min_usd": 5.0,
+        "min_usd": 3.0,
     },
 }
 
