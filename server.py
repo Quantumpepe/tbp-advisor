@@ -1078,6 +1078,76 @@ MEME_CAPTIONS_CBOOST = [
     "C-Boost mode: ON. Need a spicy caption? 😏",
 ]
 
+# ==========
+# /about & /dev Commands (TBP + C-Boost, zweisprachig)
+# ==========
+
+def handle_extra_commands(text, chat_id, lang, is_cboost_chat, msg_id=None):
+    low = text.lower().strip()
+
+    if low.startswith("/about"):
+        if is_cboost_chat:
+            msg = (
+                "🤖 <b>C-BoostAI & TBP-AI</b>\n\n"
+                "Ich bin der offizielle KI-Assistent für den C-Boost Micro Supply Token auf Polygon.\n"
+                "Ich helfe dir bei Fragen zu Vision, Utility, Community, Raids und Zukunftsplänen.\n\n"
+                "🇬🇧 I am the official AI assistant for the C-Boost micro supply token on Polygon.\n"
+                "I support the community with information about vision, utility, raids and future plans.\n\n"
+                "Beide Bots (TBP-AI & C-BoostAI) werden vom Entwickler laufend erweitert und verbessert.\n"
+                "Both bots (TBP-AI & C-BoostAI) are constantly being expanded and improved by the developer."
+            )
+        else:
+            msg = (
+                "🤖 <b>TurboPepe-AI (TBP-AI)</b>\n\n"
+                "Ich bin der offizielle KI-Assistent von TurboPepe-AI (TBP) auf Polygon.\n"
+                "Ich beantworte Fragen zum Projekt, Tokenomics, Sicherheit und der Community – keine Finanzberatung.\n\n"
+                "🇬🇧 I am the official AI assistant of TurboPepe-AI (TBP) on Polygon.\n"
+                "I answer questions about the project, tokenomics, security and the community – no financial advice.\n\n"
+                "TBP-AI und C-BoostAI werden vom Entwickler ständig weiter ausgebaut und verbessert.\n"
+                "TBP-AI and C-BoostAI are continuously upgraded and improved by the developer."
+            )
+        tg_send(chat_id, msg, reply_to=msg_id, preview=False)
+        return True
+
+    if low.startswith("/dev"):
+        if is_cboost_chat:
+            msg = (
+                "🛠 <b>Developer Info – C-BoostAI & TBP-AI</b>\n\n"
+                "Der Entwickler arbeitet laufend an neuen Features:\n"
+                "• Verbesserter BuyBot (mehr Daten, höhere Genauigkeit)\n"
+                "• Stärkere AI-Sicherheitsfilter gegen Scams & Fremd-Promo\n"
+                "• Bessere Antworten in Deutsch & Englisch\n"
+                "• Mehr Auto-Posts, Statistiken und Community-Tools\n\n"
+                "🇬🇧 The developer is constantly adding new features:\n"
+                "• Improved buy bot (more data, more accuracy)\n"
+                "• Stronger AI security filters against scams & external promo\n"
+                "• Better replies in German & English\n"
+                "• More auto-posts, stats and community tools\n\n"
+                "Wenn du Ideen für neue Funktionen hast, schreib sie einfach in den Chat.\n"
+                "If you have ideas for new features, just drop them in the chat."
+            )
+        else:
+            msg = (
+                "🛠 <b>Developer Info – TBP-AI & C-BoostAI</b>\n\n"
+                "Der Entwickler baut die Bots Schritt für Schritt aus:\n"
+                "• TBP & C-Boost BuyBot mit Live-Daten\n"
+                "• AI-Sicherheitsfilter gegen Listing-Scams & Spam\n"
+                "• Verbesserte Antworten (DE/EN) speziell für die Community\n"
+                "• Mehr Auto-Posts, Statistiken und zukünftige AI-Tools\n\n"
+                "🇬🇧 The developer is actively upgrading the bots:\n"
+                "• TBP & C-Boost buy bot with live data\n"
+                "• AI security filters against listing scams & spam\n"
+                "• Improved replies (DE/EN) tailored for the community\n"
+                "• More auto-posts, stats and future AI tools\n\n"
+                "Feature-Wünsche kannst du direkt hier im Chat posten.\n"
+                "You can post your feature requests directly here in the chat."
+            )
+        tg_send(chat_id, msg, reply_to=msg_id, preview=False)
+        return True
+
+    return False
+
+
 @app.route("/telegram", methods=["GET", "POST"])
 def telegram_webhook():
     if request.method == "GET":
@@ -1222,8 +1292,13 @@ def telegram_webhook():
         return jsonify({"ok": True})
 
     if low.startswith("/help"):
-        tg_send(chat_id, "/price • /stats • /chart • /links • /rules • /security • /id", reply_to=msg_id, preview=False)
+        tg_send(chat_id, "/price • /stats • /chart • /links • /rules • /security • /id • /about • /dev", reply_to=msg_id, preview=False)
         return jsonify({"ok": True})
+
+    # NEU: /about & /dev
+    if low.startswith("/about") or low.startswith("/dev"):
+        if handle_extra_commands(text, chat_id, lang, is_cboost_chat, msg_id):
+            return jsonify({"ok": True})
 
     if low.startswith("/rules") or low.startswith("/security"):
         if is_cboost_chat:
