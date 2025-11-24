@@ -587,6 +587,9 @@ def fetch_pool_trades(network: str, pool: str):
     """
     Holt die letzten Trades eines Pools von GeckoTerminal.
     Wir nutzen nur Buys innerhalb der letzten 24h.
+    Zusätzlich holen wir:
+      - token_amount  -> Menge TBP / C-Boost
+      - quote_amount  -> Menge POL (Quote-Token), soweit verfügbar
     """
     if not network or not pool:
         return []
@@ -609,11 +612,19 @@ def fetch_pool_trades(network: str, pool: str):
                 or attrs.get("amount_in_usd")
                 or attrs.get("amount_out_usd")
             )
+            # Menge des Base-Tokens (TBP / C-Boost)
             token_amount = _safe_float(
                 attrs.get("base_token_amount")
                 or attrs.get("token_amount")
                 or attrs.get("amount_out")
                 or attrs.get("amount_in")
+            )
+            # Menge des Quote-Tokens (auf Polygon für dich relevant: POL)
+            quote_amount = _safe_float(
+                attrs.get("quote_token_amount")
+                or attrs.get("other_token_amount")
+                or attrs.get("amount_in")
+                or attrs.get("amount_out")
             )
             ts = attrs.get("timestamp") or attrs.get("block_timestamp") or 0
             try:
@@ -631,6 +642,7 @@ def fetch_pool_trades(network: str, pool: str):
                 "wallet": wallet,
                 "usd": usd,
                 "token_amount": token_amount,
+                "quote_amount": quote_amount,  # NEU: POL-Menge
                 "timestamp": ts,
                 "price_usd": price,
             })
@@ -643,6 +655,7 @@ def fetch_pool_trades(network: str, pool: str):
 def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
     usd = trade.get("usd")
     token_amount = trade.get("token_amount")
+    pol_amount = trade.get("quote_amount")   # NEU: POL-Menge
     wallet = trade.get("wallet")
     tx_hash = trade.get("tx_hash")
 
@@ -654,10 +667,15 @@ def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
         "🐸 <b>New TBP Buy</b>",
         "",
         f"💰 Value: {fmt_usd(usd, 2) if usd is not None else 'N/A'}",
-        f"🪙 Amount: {token_amount:.4f} TBP" if token_amount is not None else "🪙 Amount: N/A",
-        f"📈 Price (after): {price_txt}",
-        f"🏦 MC: {mc_txt}",
     ]
+
+    # POL-Menge pro Buy anzeigen, falls verfügbar
+    if pol_amount is not None:
+        lines.append(f"⛽ POL used: {pol_amount:.4f} POL")
+
+    lines.append(f"🪙 Amount: {token_amount:.4f} TBP" if token_amount is not None else "🪙 Amount: N/A")
+    lines.append(f"📈 Price (after): {price_txt}")
+    lines.append(f"🏦 MC: {mc_txt}")
 
     if wallet:
         new_tag = " (NEW)" if is_new else ""
@@ -676,6 +694,7 @@ def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
 def send_cboost_buy_alert(chat_id: int, trade: dict, is_new: bool):
     usd = trade.get("usd")
     token_amount = trade.get("token_amount")
+    pol_amount = trade.get("quote_amount")   # NEU: POL-Menge auch für C-Boost
     wallet = trade.get("wallet")
     tx_hash = trade.get("tx_hash")
 
@@ -690,10 +709,14 @@ def send_cboost_buy_alert(chat_id: int, trade: dict, is_new: bool):
         "⚡ <b>New C-Boost Buy</b>",
         "",
         f"💰 Value: {fmt_usd(usd, 2) if usd is not None else 'N/A'}",
-        f"🪙 Amount: {token_amount:.4f} C-Boost" if token_amount is not None else "🪙 Amount: N/A",
-        f"📈 Price (after): {price_txt}",
-        f"🏦 MC: {mc_txt}",
     ]
+
+    if pol_amount is not None:
+        lines.append(f"⛽ POL used: {pol_amount:.4f} POL")
+
+    lines.append(f"🪙 Amount: {token_amount:.4f} C-Boost" if token_amount is not None else "🪙 Amount: N/A")
+    lines.append(f"📈 Price (after): {price_txt}")
+    lines.append(f"🏦 MC: {mc_txt}")
 
     if wallet:
         new_tag = " (NEW)" if is_new else ""
@@ -1242,7 +1265,7 @@ def telegram_webhook():
         return jsonify({"ok": True})
 
     # ---- Single-Word Trigger „raid.“ ----
-    if text.strip().lower() == "raid.":
+    if text.strip().lower() == "raid.":  # nur genau "raid."
         if is_cboost_chat:
             reply_txt = say(
                 lang,
