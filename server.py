@@ -516,61 +516,49 @@ def start_autopost_background(chat_id: int):
 # BUYBOT – TBP & C-BOOST
 # =========================
 
+# Optional: C-Boost Contract (kannst du auch in Render als ENV setzen: CBOOST_CONTRACT)
+CBOOST_CONTRACT = os.environ.get("CBOOST_CONTRACT", "").strip().lower()
+
 TOKEN_BUYBOT = {
     "tbp": {
-        "network": "polygon_pos",      # GeckoTerminal network
-        "dex_chain": "polygon",        # DexScreener chainId
+        "network": "polygon_pos",       # GeckoTerminal network
         "pool": TBP_PAIR,
         "symbol": "TBP",
         "name": "TurboPepe-AI",
         "logo_url": TBP_LOGO_URL,
-        "min_usd": 3.0,                # MINDESTKAUF in USD
+        "min_usd": 3.0,                 # Mindest-Buy in USD
+        "token_contract": TBP_CONTRACT.lower(),
     },
     "cboost": {
         "network": CBOOST_NETWORK or "polygon_pos",
-        "dex_chain": "polygon",
         "pool": CBOOST_POOL_ADDRESS or CBOOST_PAIR,
         "symbol": "C-Boost",
         "name": "C-Boost",
         "logo_url": CBOOST_LOGO_URL,
-        "min_usd": 3.0,                # MINDESTKAUF in USD
+        "min_usd": 3.0,
+        "token_contract": CBOOST_CONTRACT,   # kann leer sein, dann wird nur 'kind' benutzt
     },
 }
 
 
-def _get_pair_price_usd_from_dexscreener(chain_id: str, pair_id: str):
-    """
-    Holt den aktuellen USD-Preis des BASE-Tokens aus dem DexScreener-Pair.
-    DexScreener ist hier unsere 'primäre' Quelle für den Preis.
-    """
-    try:
-        r = requests.get(
-            f"https://api.dexscreener.com/latest/dex/pairs/{chain_id}/{pair_id}",
-            timeout=6
-        )
-        r.raise_for_status()
-        j = r.json()
-        pair = (j.get("pairs") or [None])[0] or j.get("pair") or {}
-        return _safe_float(pair.get("priceUsd"))
-    except Exception as e:
-        print(f"[BUYBOT] DexScreener price error: {e}")
-        return None
-
-
-def fetch_pool_trades(network: str, pool_address: str, dex_chain: str, limit: int = 25):
+def fetch_pool_trades(network: str, pool_address: str, token_contract: str = "", limit: int = 25):
     """
     Holt die letzten Trades aus GeckoTerminal für ein Pool
     und normalisiert sie für den Buybot.
 
-    USD-Wert wird NICHT mehr blind von Gecko genommen, sondern:
-      1) trade_amount_usd, wenn vorhanden
-      2) sonst base_token_amount * DexScreener-Preis (BASE-Token)
+    Wichtige Felder aus Gecko:
+      - kind               -> 'buy' / 'sell' (relativ zu einem Token, aber unklar)
+      - volume_in_usd      -> USD-Wert des Trades
+      - from_token_amount
+      - to_token_amount
+      - from_token_address
+      - to_token_address
+
+    Wir interpretieren:
+      - Wenn to_token_address == token_contract  -> BUY des Tokens
+      - Wenn from_token_address == token_contract-> SELL des Tokens
     """
 
-    # 1) TBP/CBOOST-Preis in USD von DexScreener holen
-    price_usd = _get_pair_price_usd_from_dexscreener(dex_chain, pool_address)
-
-    # 2) Trades aus GeckoTerminal holen
     url = f"https://api.geckoterminal.com/api/v2/networks/{network}/pools/{pool_address}/trades"
 
     try:
@@ -581,7 +569,9 @@ def fetch_pool_trades(network: str, pool_address: str, dex_chain: str, limit: in
         print(f"[BUYBOT] fetch_pool_trades error: {e}")
         return []
 
+    token_contract = (token_contract or "").lower()
     trades = []
+
     for item in data[:limit]:
         attrs = item.get("attributes", {}) or {}
 
@@ -592,45 +582,47 @@ def fetch_pool_trades(network: str, pool_address: str, dex_chain: str, limit: in
             or ""
         )
 
-        # --- SIDE-Detection inkl. Fallback ---
-        side = (
-            attrs.get("trade_type")
-            or attrs.get("side")
-            or attrs.get("taker_type")
-            or attrs.get("direction")
-            or ""
-        )
-        side = str(side).lower()
+        kind = (attrs.get("kind") or "").lower()
 
-        base_amount = _safe_float(
-            attrs.get("base_token_amount")
-            or attrs.get("token_amount")
-            or attrs.get("amount_out")
-        )
-        quote_amount = _safe_float(
-            attrs.get("quote_token_amount")
-            or attrs.get("quote_amount")
-            or attrs.get("amount_in")
-        )
+        from_addr = (attrs.get("from_token_address") or "").lower()
+        to_addr   = (attrs.get("to_token_address") or "").lower()
 
-        # GeckoTerminal liefert manchmal kein "side"
-        # -> Wenn base_amount > 0 und quote_amount > 0, ist der Trade gültig.
-        # Wir lassen side leer, falls wir es wirklich nicht erkennen.
-        if not side:
-            if base_amount and base_amount > 0 and quote_amount and quote_amount > 0:
-                # Wir werten base_token als TBP/CBOOST → base_amount > 0 = BUY
+        from_amt = _safe_float(attrs.get("from_token_amount"))
+        to_amt   = _safe_float(attrs.get("to_token_amount"))
+
+        # --- SIDE-Logik: was ist BUY für TBP / C-Boost? ---
+        side = kind
+        token_amount = None
+        quote_amount = None
+
+        if token_contract:
+            # Wenn das Token auf der "to"-Seite steht -> wir bekommen Token = BUY
+            if to_addr == token_contract:
                 side = "buy"
+                token_amount = to_amt
+                quote_amount = from_amt
+            # Wenn das Token auf der "from"-Seite steht -> wir geben Token ab = SELL
+            elif from_addr == token_contract:
+                side = "sell"
+                token_amount = from_amt
+                quote_amount = to_amt
+            else:
+                # Fallback, falls wir die Adresse nicht matchen konnten
+                token_amount = to_amt
+                quote_amount = from_amt
+        else:
+            # Kein Contract bekannt -> wir nehmen einfach 'kind' und Mengen wie geliefert
+            side = kind
+            token_amount = to_amt
+            quote_amount = from_amt
 
-        # --- USD-Wert bestimmen ---
+        # --- USD-Wert: volume_in_usd ist bei dir sichtbar ---
         usd = _safe_float(
-            attrs.get("trade_amount_usd")
+            attrs.get("volume_in_usd")
+            or attrs.get("trade_amount_usd")
             or attrs.get("amount_usd")
             or attrs.get("value_usd")
         )
-
-        # Falls Gecko keinen USD-Wert liefert, rechnen wir selbst:
-        if (usd is None or usd <= 0) and base_amount and price_usd:
-            usd = base_amount * price_usd
 
         wallet = (
             attrs.get("tx_from_address")
@@ -644,14 +636,13 @@ def fetch_pool_trades(network: str, pool_address: str, dex_chain: str, limit: in
                 "tx_hash": tx_hash,
                 "side": side,
                 "usd": usd,
-                "token_amount": base_amount,
+                "token_amount": token_amount,
                 "quote_amount": quote_amount,
                 "wallet": wallet,
             }
         )
 
-    # Gecko liefert neueste zuerst → wir drehen um, damit die Liste
-    # von ALT -> NEU sortiert ist (wichtig für last_hash-Logik)
+    # Gecko liefert neueste zuerst → drehen, damit ALT -> NEU sortiert
     trades.reverse()
     return trades
 
@@ -785,7 +776,11 @@ def process_buybot_for(token_key: str, chat_id: int):
     if not cfg:
         return
 
-    trades = fetch_pool_trades(cfg["network"], cfg["pool"], cfg["dex_chain"])
+    trades = fetch_pool_trades(
+        cfg["network"],
+        cfg["pool"],
+        cfg.get("token_contract", "")
+    )
     if not trades:
         return
 
