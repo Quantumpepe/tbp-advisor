@@ -523,7 +523,7 @@ TOKEN_BUYBOT = {
         "symbol": "TBP",
         "name": "TurboPepe-AI",
         "logo_url": TBP_LOGO_URL,
-        "min_usd": 3.0,
+        "min_usd": 3.0,  # MINDESTKAUF in USD
     },
     "cboost": {
         "network": CBOOST_NETWORK or "polygon_pos",
@@ -531,52 +531,121 @@ TOKEN_BUYBOT = {
         "symbol": "C-Boost",
         "name": "C-Boost",
         "logo_url": CBOOST_LOGO_URL,
-        "min_usd": 3.0,
+        "min_usd": 3.0,  # MINDESTKAUF in USD
     },
 }
 
-    side = (
-        attrs.get("trade_type")
-        or attrs.get("side")
-        or attrs.get("taker_type")
-        or attrs.get("direction")
-        or ""
-    ).lower()
 
-# --- BUY detection fallback ---
-# GeckoTerminal liefert manchmal KEIN 'side'
-# → Aber base_token_amount > 0 bedeutet IMMER BUY
-    base_amount = _safe_float(
-        attrs.get("base_token_amount")
-        or attrs.get("token_amount")
-        or attrs.get("amount_out")
-    )
-    quote_amount = _safe_float(
-        attrs.get("quote_amount")
-        or attrs.get("amount_in")
-    )
+def fetch_pool_trades(network: str, pool_address: str, limit: int = 25):
+    """
+    Holt die letzten Trades aus GeckoTerminal für ein Pool
+    und normalisiert sie für den Buybot.
 
-    if not side:
-        if base_amount and base_amount > 0:
-            side = "buy"
-        elif quote_amount and quote_amount > 0:
-            side = "sell"
+    Rückgabe: Liste von Dicts mit:
+      - tx_hash
+      - side        ("buy" / "sell")
+      - usd         (Tradewert in USD)
+      - token_amount (Menge Base-Token, also TBP/C-Boost)
+      - quote_amount (Menge POL/USDT/…)
+      - wallet      (Absender)
+    """
+    url = f"https://api.geckoterminal.com/api/v2/networks/{network}/pools/{pool_address}/trades"
+
+    try:
+        r = requests.get(url, timeout=8)
+        r.raise_for_status()
+        data = r.json().get("data") or []
+    except Exception as e:
+        print(f"[BUYBOT] fetch_pool_trades error: {e}")
+        return []
+
+    trades = []
+    for item in data[:limit]:
+        attrs = item.get("attributes", {}) or {}
+
+        tx_hash = (
+            attrs.get("tx_hash")
+            or attrs.get("transaction_hash")
+            or item.get("id")
+            or ""
+        )
+
+        # --- SIDE-Detection inkl. Fallback ---
+        side = (
+            attrs.get("trade_type")
+            or attrs.get("side")
+            or attrs.get("taker_type")
+            or attrs.get("direction")
+            or ""
+        )
+        side = str(side).lower()
+
+        base_amount = _safe_float(
+            attrs.get("base_token_amount")
+            or attrs.get("token_amount")
+            or attrs.get("amount_out")
+        )
+        quote_amount = _safe_float(
+            attrs.get("quote_token_amount")
+            or attrs.get("quote_amount")
+            or attrs.get("amount_in")
+        )
+
+        # GeckoTerminal liefert manchmal kein "side"
+        # -> base_amount > 0 => BUY, sonst SELL
+        if not side:
+            if base_amount and base_amount > 0:
+                side = "buy"
+            elif quote_amount and quote_amount > 0:
+                side = "sell"
+            else:
+                side = ""
+
+        usd = _safe_float(
+            attrs.get("trade_amount_usd")
+            or attrs.get("amount_usd")
+            or attrs.get("value_usd")
+        )
+
+        wallet = (
+            attrs.get("tx_from_address")
+            or attrs.get("from_address")
+            or attrs.get("maker_address")
+            or attrs.get("sender")
+        )
+
+        trades.append(
+            {
+                "tx_hash": tx_hash,
+                "side": side,
+                "usd": usd,
+                "token_amount": base_amount,
+                "quote_amount": quote_amount,
+                "wallet": wallet,
+            }
+        )
+
+    # Gecko liefert neueste zuerst → wir drehen um, damit die Liste
+    # von ALT -> NEU sortiert ist (wichtig für last_hash-Logik)
+    trades.reverse()
+    return trades
+
 
 def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
-    usd          = trade.get("usd")
+    usd = trade.get("usd")
     token_amount = trade.get("token_amount")
-    pol_amount   = trade.get("quote_amount")
-    wallet       = trade.get("wallet")
-    tx_hash      = trade.get("tx_hash")
+    pol_amount = trade.get("quote_amount")
+    wallet = trade.get("wallet")
+    tx_hash = trade.get("tx_hash")
 
     # Live-Daten nach dem Buy (Preis & MC)
     price_now, mc_now = get_tbp_price_and_mc()
-    stats   = get_market_stats() or {}
+    stats = get_market_stats() or {}
     vol_24h = stats.get("volume_24h")
 
     price_txt = fmt_usd(price_now, 12) if price_now is not None else "N/A"
-    mc_txt    = fmt_usd(mc_now, 0)     if mc_now  is not None else "N/A"
-    vol_txt   = fmt_usd(vol_24h, 2)    if vol_24h is not None else "N/A"
+    mc_txt = fmt_usd(mc_now, 0) if mc_now is not None else "N/A"
+    vol_txt = fmt_usd(vol_24h, 2) if vol_24h is not None else "N/A"
     chart_url = LINKS["dexscreener"]
 
     caption_lines = [
@@ -588,19 +657,25 @@ def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
         caption_lines.append(f"⛽ <b>POL used:</b> {pol_amount:.4f} POL")
 
     caption_lines.append(
-        f"🪙 <b>Amount:</b> {token_amount:.4f} TBP" if token_amount is not None else "🪙 <b>Amount:</b> N/A"
+        f"🪙 <b>Amount:</b> {token_amount:.4f} TBP"
+        if token_amount is not None
+        else "🪙 <b>Amount:</b> N/A"
     )
 
-    caption_lines.extend([
-        "",
-        f"💵 <b>Price (after):</b> {price_txt}",
-        f"🏦 <b>Market Cap:</b> {mc_txt}",
-        f"📊 <b>24h Volume:</b> {vol_txt}",
-    ])
+    caption_lines.extend(
+        [
+            "",
+            f"💵 <b>Price (after):</b> {price_txt}",
+            f"🏦 <b>Market Cap:</b> {mc_txt}",
+            f"📊 <b>24h Volume:</b> {vol_txt}",
+        ]
+    )
 
     if wallet:
         new_tag = " (NEW)" if is_new else ""
-        caption_lines.append(f"👛 <b>Wallet:</b> <code>{_short_addr(wallet)}</code>{new_tag}")
+        caption_lines.append(
+            f"👛 <b>Wallet:</b> <code>{_short_addr(wallet)}</code>{new_tag}"
+        )
 
     if tx_hash:
         caption_lines.append(
@@ -617,22 +692,23 @@ def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
     else:
         tg_send(chat_id, caption, preview=True)
 
-def send_cboost_buy_alert(chat_id: int, trade: dict, is_new: bool):
-    usd          = trade.get("usd")
-    token_amount = trade.get("token_amount")
-    pol_amount   = trade.get("quote_amount")
-    wallet       = trade.get("wallet")
-    tx_hash      = trade.get("tx_hash")
 
-    data      = get_cboost_live_data() or {}
+def send_cboost_buy_alert(chat_id: int, trade: dict, is_new: bool):
+    usd = trade.get("usd")
+    token_amount = trade.get("token_amount")
+    pol_amount = trade.get("quote_amount")
+    wallet = trade.get("wallet")
+    tx_hash = trade.get("tx_hash")
+
+    data = get_cboost_live_data() or {}
     price_now = data.get("price")
-    mc_now    = data.get("market_cap")
-    vol_now   = data.get("volume_24h")
+    mc_now = data.get("market_cap")
+    vol_now = data.get("volume_24h")
     chart_url = data.get("chart_url")
 
     price_txt = fmt_usd(price_now, 10) if price_now is not None else "N/A"
-    mc_txt    = fmt_usd(mc_now, 2)     if mc_now  is not None else "N/A"
-    vol_txt   = fmt_usd(vol_now, 2)    if vol_now is not None else "N/A"
+    mc_txt = fmt_usd(mc_now, 2) if mc_now is not None else "N/A"
+    vol_txt = fmt_usd(vol_now, 2) if vol_now is not None else "N/A"
 
     caption_lines = [
         "⚡ <b>C-Boost Live Data – New Buy</b>\n",
@@ -643,19 +719,25 @@ def send_cboost_buy_alert(chat_id: int, trade: dict, is_new: bool):
         caption_lines.append(f"⛽ <b>POL used:</b> {pol_amount:.4f} POL")
 
     caption_lines.append(
-        f"🪙 <b>Amount:</b> {token_amount:.4f} C-Boost" if token_amount is not None else "🪙 <b>Amount:</b> N/A"
+        f"🪙 <b>Amount:</b> {token_amount:.4f} C-Boost"
+        if token_amount is not None
+        else "🪙 <b>Amount:</b> N/A"
     )
 
-    caption_lines.extend([
-        "",
-        f"💵 <b>Price (after):</b> {price_txt}",
-        f"🏦 <b>Market Cap:</b> {mc_txt}",
-        f"📊 <b>24h Volume:</b> {vol_txt}",
-    ])
+    caption_lines.extend(
+        [
+            "",
+            f"💵 <b>Price (after):</b> {price_txt}",
+            f"🏦 <b>Market Cap:</b> {mc_txt}",
+            f"📊 <b>24h Volume:</b> {vol_txt}",
+        ]
+    )
 
     if wallet:
         new_tag = " (NEW)" if is_new else ""
-        caption_lines.append(f"👛 <b>Wallet:</b> <code>{_short_addr(wallet)}</code>{new_tag}")
+        caption_lines.append(
+            f"👛 <b>Wallet:</b> <code>{_short_addr(wallet)}</code>{new_tag}"
+        )
 
     if tx_hash:
         caption_lines.append(
@@ -672,6 +754,7 @@ def send_cboost_buy_alert(chat_id: int, trade: dict, is_new: bool):
     else:
         tg_send(chat_id, caption, preview=True)
 
+
 def process_buybot_for(token_key: str, chat_id: int):
     cfg = TOKEN_BUYBOT.get(token_key)
     if not cfg:
@@ -683,20 +766,24 @@ def process_buybot_for(token_key: str, chat_id: int):
 
     state = MEM["buybot"][token_key]
     last_hash = state.get("last_hash")
+
     hashes = [t.get("tx_hash") for t in trades if t.get("tx_hash")]
     if not hashes:
         return
 
+    # Beim ersten Start nur initialisieren, nichts posten
     if not last_hash:
-        state["last_hash"] = hashes[-1]
+        state["last_hash"] = hashes[-1]  # letzter = neuester, weil wir reversed haben
         return
 
+    # Wenn der letzte Hash nicht mehr in den letzten Trades ist (alte Seite),
+    # setzen wir einfach neu und posten nichts (verhindert Spam bei Restart).
     if last_hash not in hashes:
         state["last_hash"] = hashes[-1]
         return
 
     idx = hashes.index(last_hash)
-    new_trades = trades[idx+1:]
+    new_trades = trades[idx + 1 :]
     if not new_trades:
         return
 
@@ -723,6 +810,7 @@ def process_buybot_for(token_key: str, chat_id: int):
 
     state["last_hash"] = hashes[-1]
 
+
 def start_buybot_background():
     def loop():
         while True:
@@ -735,7 +823,9 @@ def start_buybot_background():
             except Exception as e:
                 print(f"[BUYBOT] loop error: {e}")
             time.sleep(25)
+
     threading.Thread(target=loop, daemon=True).start()
+
 
 # =========================
 # FLASK WEB (health/ask/admin)
