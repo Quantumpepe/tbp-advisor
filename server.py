@@ -1119,37 +1119,22 @@ def telegram_webhook():
             return jsonify({"ok": True})
 
         p = get_live_price()
-s = get_market_stats() or {}
-lines = []
-if p is not None:
-    lines.append(say(lang, "💰 Preis", "💰 Price") + f": {fmt_usd(p, 12)}")
-if s.get("change_24h") not in (None, "", "null"):
-    lines.append(f"📈 24h: {s['change_24h']}%")
-if s.get("liquidity_usd") not in (None, "", "null"):
-    lines.append("💧 " + say(lang, "Liquidität", "Liquidity") + f": {fmt_usd(s['liquidity_usd'])}")
-if s.get("volume_24h") not in (None, "", "null"):
-    lines.append(f"🔄 Vol 24h: {fmt_usd(s['volume_24h'])}")
-
-caption = "\n".join(lines) if lines else say(lang, "Keine Daten.", "No data.")
-
-# 🐸 TBP-Logo anzeigen
-if TBP_LOGO_URL:
-    tg_send_photo(
-        chat_id,
-        TBP_LOGO_URL,
-        caption=caption,
-        reply_to=msg_id
-    )
-else:
-    # Wenn kein Logo gesetzt ist → Fallback
-    tg_buttons(
-        chat_id,
-        caption,
-        [("Chart", LINKS["dexscreener"]), ("Sushi", LINKS["buy"])]
-    )
-
-return jsonify({"ok": True})
-
+        s = get_market_stats() or {}
+        lines = []
+        if p is not None:
+            lines.append(say(lang, "💰 Preis", "💰 Price") + f": {fmt_usd(p, 12)}")
+        if s.get("change_24h") not in (None, "", "null"):
+            lines.append(f"📈 24h: {s['change_24h']}%")
+        if s.get("liquidity_usd") not in (None, "", "null"):
+            lines.append("💧 " + say(lang, "Liquidität", "Liquidity") + f": {fmt_usd(s['liquidity_usd'])}")
+        if s.get("volume_24h") not in (None, "", "null"):
+            lines.append(f"🔄 Vol 24h: {fmt_usd(s['volume_24h'])}")
+        tg_buttons(
+            chat_id,
+            "\n".join(lines) if lines else say(lang, "Keine Daten.", "No data."),
+            [("Chart", LINKS["dexscreener"]), ("Sushi", LINKS["buy"])]
+        )
+        return jsonify({"ok": True})
 
     if low.startswith("/stats"):
         if is_cboost_chat:
