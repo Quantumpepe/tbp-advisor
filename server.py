@@ -518,37 +518,59 @@ def start_autopost_background(chat_id: int):
 
 TOKEN_BUYBOT = {
     "tbp": {
-        "network": "polygon_pos",
+        "network": "polygon_pos",      # GeckoTerminal network
+        "dex_chain": "polygon",        # DexScreener chainId
         "pool": TBP_PAIR,
         "symbol": "TBP",
         "name": "TurboPepe-AI",
         "logo_url": TBP_LOGO_URL,
-        "min_usd": 3.0,  # MINDESTKAUF in USD
+        "min_usd": 3.0,                # MINDESTKAUF in USD
     },
     "cboost": {
         "network": CBOOST_NETWORK or "polygon_pos",
+        "dex_chain": "polygon",
         "pool": CBOOST_POOL_ADDRESS or CBOOST_PAIR,
         "symbol": "C-Boost",
         "name": "C-Boost",
         "logo_url": CBOOST_LOGO_URL,
-        "min_usd": 3.0,  # MINDESTKAUF in USD
+        "min_usd": 3.0,                # MINDESTKAUF in USD
     },
 }
 
 
-def fetch_pool_trades(network: str, pool_address: str, limit: int = 25):
+def _get_pair_price_usd_from_dexscreener(chain_id: str, pair_id: str):
+    """
+    Holt den aktuellen USD-Preis des BASE-Tokens aus dem DexScreener-Pair.
+    DexScreener ist hier unsere 'primäre' Quelle für den Preis.
+    """
+    try:
+        r = requests.get(
+            f"https://api.dexscreener.com/latest/dex/pairs/{chain_id}/{pair_id}",
+            timeout=6
+        )
+        r.raise_for_status()
+        j = r.json()
+        pair = (j.get("pairs") or [None])[0] or j.get("pair") or {}
+        return _safe_float(pair.get("priceUsd"))
+    except Exception as e:
+        print(f"[BUYBOT] DexScreener price error: {e}")
+        return None
+
+
+def fetch_pool_trades(network: str, pool_address: str, dex_chain: str, limit: int = 25):
     """
     Holt die letzten Trades aus GeckoTerminal für ein Pool
     und normalisiert sie für den Buybot.
 
-    Rückgabe: Liste von Dicts mit:
-      - tx_hash
-      - side        ("buy" / "sell")
-      - usd         (Tradewert in USD)
-      - token_amount (Menge Base-Token, also TBP/C-Boost)
-      - quote_amount (Menge POL/USDT/…)
-      - wallet      (Absender)
+    USD-Wert wird NICHT mehr blind von Gecko genommen, sondern:
+      1) trade_amount_usd, wenn vorhanden
+      2) sonst base_token_amount * DexScreener-Preis (BASE-Token)
     """
+
+    # 1) TBP/CBOOST-Preis in USD von DexScreener holen
+    price_usd = _get_pair_price_usd_from_dexscreener(dex_chain, pool_address)
+
+    # 2) Trades aus GeckoTerminal holen
     url = f"https://api.geckoterminal.com/api/v2/networks/{network}/pools/{pool_address}/trades"
 
     try:
@@ -592,20 +614,23 @@ def fetch_pool_trades(network: str, pool_address: str, limit: int = 25):
         )
 
         # GeckoTerminal liefert manchmal kein "side"
-        # -> base_amount > 0 => BUY, sonst SELL
+        # -> Wenn base_amount > 0 und quote_amount > 0, ist der Trade gültig.
+        # Wir lassen side leer, falls wir es wirklich nicht erkennen.
         if not side:
-            if base_amount and base_amount > 0:
+            if base_amount and base_amount > 0 and quote_amount and quote_amount > 0:
+                # Wir werten base_token als TBP/CBOOST → base_amount > 0 = BUY
                 side = "buy"
-            elif quote_amount and quote_amount > 0:
-                side = "sell"
-            else:
-                side = ""
 
+        # --- USD-Wert bestimmen ---
         usd = _safe_float(
             attrs.get("trade_amount_usd")
             or attrs.get("amount_usd")
             or attrs.get("value_usd")
         )
+
+        # Falls Gecko keinen USD-Wert liefert, rechnen wir selbst:
+        if (usd is None or usd <= 0) and base_amount and price_usd:
+            usd = base_amount * price_usd
 
         wallet = (
             attrs.get("tx_from_address")
@@ -760,7 +785,7 @@ def process_buybot_for(token_key: str, chat_id: int):
     if not cfg:
         return
 
-    trades = fetch_pool_trades(cfg["network"], cfg["pool"])
+    trades = fetch_pool_trades(cfg["network"], cfg["pool"], cfg["dex_chain"])
     if not trades:
         return
 
@@ -825,6 +850,7 @@ def start_buybot_background():
             time.sleep(25)
 
     threading.Thread(target=loop, daemon=True).start()
+
 
 
 # =========================
