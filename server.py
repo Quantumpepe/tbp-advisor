@@ -1149,7 +1149,7 @@ def telegram_webhook():
             )
 
         return jsonify({"ok": True})
-)
+    
 
     if low.startswith("/stats"):
         if is_cboost_chat:
