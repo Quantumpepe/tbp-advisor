@@ -405,8 +405,8 @@ def get_cboost_live_data():
         if not OPENAI_API_KEY:
             return None
 
-            if mode == "cboost":
-                system_msg = (
+        if mode == "cboost":
+            system_msg = (
                     "You are C-BoostAI, the official assistant of the C-Boost micro supply token on Polygon.\n"
                     "You must ALWAYS answer in the user's language (German or English). Detect language automatically.\n\n"
 
