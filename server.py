@@ -1150,22 +1150,29 @@ def handle_extra_commands(text, chat_id, lang, is_cboost_chat, msg_id=None):
                 "Wenn du Ideen für neue Funktionen hast, schreib sie einfach in den Chat.\n"
                 "If you have ideas for new features, just drop them in the chat."
             )
-        else:
+         else:
             msg = (
                 "🛠 <b>Developer Info – TBP-AI & C-BoostAI</b>\n\n"
                 "Der Entwickler baut die Bots Schritt für Schritt aus:\n"
                 "• TBP & C-Boost BuyBot mit Live-Daten\n"
-                "• AI-Sicherheitsfilter gegen Listing-Scams & Spam\n"
+                "• Stärkere AI-Sicherheitsfilter gegen Scams & Fremd-Promo\n"
                 "• Verbesserte Antworten (DE/EN) speziell für die Community\n"
-                "• Mehr Auto-Posts, Statistiken und zukünftige AI-Tools\n\n"
-                "🇬🇧 The developer is actively upgrading the bots:\n"
+                "• Mehr Auto-Posts, Statistiken und AI-Tools rund um den Kryptomarkt\n\n"
+                "Langfristig ist geplant, bei ausreichend Market Cap (ca. 10M USD+), eigene Server und eine\n"
+                "private KI-Infrastruktur rund um TBP aufzubauen – mit Fokus auf On-Chain-Analyse, Security\n"
+                "und Markt-Intelligenz für die Community. Das ist ein Ziel, keine Gewinn-Garantie.\n\n"
+                "🇬🇧 The developer is actively upgrading the bots step by step:\n"
                 "• TBP & C-Boost buy bot with live data\n"
-                "• AI security filters against listing scams & spam\n"
+                "• Stronger AI security filters against scams & external promo\n"
                 "• Improved replies (DE/EN) tailored for the community\n"
-                "• More auto-posts, stats and future AI tools\n\n"
+                "• More auto-posts, stats and AI tools around the crypto market\n\n"
+                "Long term, if TBP reaches a solid market cap (around 10M USD+), the goal is to build own\n"
+                "servers and a private AI infrastructure around TBP, focused on on-chain analysis, security\n"
+                "and market intelligence for the community. This is a plan, not a profit guarantee.\n\n"
                 "Feature-Wünsche kannst du direkt hier im Chat posten.\n"
                 "You can post your feature requests directly here in the chat."
             )
+
         tg_send(chat_id, msg, reply_to=msg_id, preview=False)
         return True
 
