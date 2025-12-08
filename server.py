@@ -441,7 +441,7 @@ RULES:
 - No financial advice.
 - If users ask about TBP, say you are only responsible for C-Boost.
 """
-        else:
+    else:
         system_msg = """You are TBP-AI, the official assistant of TurboPepe-AI (TBP) on Polygon.
 You must ALWAYS answer in the user's language (German or English). Detect language automatically.
 
