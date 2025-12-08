@@ -1112,12 +1112,24 @@ def handle_extra_commands(text, chat_id, lang, is_cboost_chat, msg_id=None):
             msg = (
                 "🤖 <b>TurboPepe-AI (TBP-AI)</b>\n\n"
                 "Ich bin der offizielle KI-Assistent von TurboPepe-AI (TBP) auf Polygon.\n"
-                "Ich beantworte Fragen zum Projekt, Tokenomics, Sicherheit und der Community – keine Finanzberatung.\n\n"
+                "Aktuell ist TBP ein Meme + AI Token mit gebrannter LP, 0% Tax, BuyBot und AI-Sicherheitsfiltern.\n"
+                "Ich erkläre das Projekt, Tokenomics, Sicherheit und die langfristige Vision – keine Finanzberatung.\n\n"
+                "📡 <b>Langfristige Idee:</b>\n"
+                "Wenn TBP eine stabile Market Cap (ca. 10M USD oder mehr) mit genug Liquidität erreicht, soll ein Teil\n"
+                "der Projektmittel in eigene High-Performance-Server und eine private KI fließen, die sich auf\n"
+                "Krypto- und On-Chain-Analyse spezialisiert. Das hängt komplett vom Erfolg von TBP und der Community ab\n"
+                "und ist keine Gewinn- oder Rendite-Garantie.\n\n"
                 "🇬🇧 I am the official AI assistant of TurboPepe-AI (TBP) on Polygon.\n"
-                "I answer questions about the project, tokenomics, security and the community – no financial advice.\n\n"
-                "TBP-AI und C-BoostAI werden vom Entwickler ständig weiter ausgebaut und verbessert.\n"
-                "TBP-AI and C-BoostAI are continuously upgraded and improved by the developer."
+                "Right now TBP is a meme + AI token with burned LP, 0% tax, a buy bot and AI security filters.\n"
+                "I explain the project, tokenomics, security and the long term vision – no financial advice.\n\n"
+                "📡 <b>Long term idea:</b> If TBP reaches a sustainable market cap (around 10M USD or more, with enough\n"
+                "liquidity), part of the project funds can be used for own servers and a private AI system focused on\n"
+                "crypto and on-chain analysis. This fully depends on the success of TBP and the community and is NOT a\n"
+                "promise of profit.\n\n"
+                "TBP-AI und C-BoostAI werden vom Entwickler schrittweise weiter ausgebaut.\n"
+                "TBP-AI and C-BoostAI are upgraded step by step by the developer."
             )
+
         tg_send(chat_id, msg, reply_to=msg_id, preview=False)
         return True
 
