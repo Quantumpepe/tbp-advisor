@@ -1150,7 +1150,7 @@ def handle_extra_commands(text, chat_id, lang, is_cboost_chat, msg_id=None):
                 "Wenn du Ideen für neue Funktionen hast, schreib sie einfach in den Chat.\n"
                 "If you have ideas for new features, just drop them in the chat."
             )
-         else:
+        else:
             msg = (
                 "🛠 <b>Developer Info – TBP-AI & C-BoostAI</b>\n\n"
                 "Der Entwickler baut die Bots Schritt für Schritt aus:\n"
