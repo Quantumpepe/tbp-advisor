@@ -461,8 +461,9 @@ BUYBOT INFO:
 
 NFT INFO:
 - TBP-AI has official NFTs: Gold NFT ($60) and Silver NFT ($30).
-- Official mint page: https://quantumpepe.github.io/TBP-NFTs/
-- Users can mint via MetaMask or WalletConnect.
+- Official mint page: https://quantumpepe.github.io/NFTs-WalletConnectV2/
+- Users can mint via WalletConnect.
+- NFTs open for Users in the Future More ways to use AI
 
 VISION / LONG TERM PLAN:
 - TBP is not only a meme. The long term goal is to build a dedicated AI infrastructure around TBP.
