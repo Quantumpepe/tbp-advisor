@@ -54,7 +54,7 @@ LINKS = {
 # TBP Supply für grobe MC-Schätzung (nur Info, nicht kritisch)
 MAX_SUPPLY  = 190_000_000_000
 BURNED      = 10_000_000_000
-
+OWNER       = 14_000_000_000
 CIRC_SUPPLY = MAX_SUPPLY - BURNED - OWNER
 
 # ==== C-BOOST MARKET CONFIG (für Trades / Charts) ====
