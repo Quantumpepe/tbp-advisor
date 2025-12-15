@@ -46,6 +46,9 @@ LINKS = {
     "telegram":     "https://t.me/turbopepe25",
     "x":            "https://x.com/TurboPepe2025",
     "contract_scan":f"https://polygonscan.com/token/{TBP_CONTRACT}",
+
+    # ✅ NFTs
+    "nfts":         "https://quantumpepe.github.io/TBP-NFTs/",
 }
 
 # TBP Supply für grobe MC-Schätzung (nur Info, nicht kritisch)
@@ -451,6 +454,16 @@ CURRENT PROJECT:
 - 0% tax, fully transparent.
 - TBP already has an AI layer: website + Telegram assistant, buy bot with on-chain data, and AI-based security filters.
 
+BUYBOT INFO:
+- TBP has an official BuyBot that posts every on-chain buy in real time in the TG group.
+  It shows USD value, POL/USDT amount, token amount, wallet short, NEW holder detection,
+  and the transaction link. This is an official TBP feature.
+
+NFT INFO:
+- TBP-AI has official NFTs: Gold NFT ($60) and Silver NFT ($30).
+- Official mint page: https://quantumpepe.github.io/TBP-NFTs/
+- Users can mint via MetaMask or WalletConnect.
+
 VISION / LONG TERM PLAN:
 - TBP is not only a meme. The long term goal is to build a dedicated AI infrastructure around TBP.
 - If TBP reaches a sustainable market cap (around 10M USD or higher, with enough liquidity), part of the project funds
@@ -460,11 +473,6 @@ VISION / LONG TERM PLAN:
   • provide tools for holders: market intelligence, scam detection, portfolio helpers, alerts, etc.
 - This is a realistic but future-oriented plan. It depends on market cap, liquidity and community growth.
   You must clearly communicate that nothing is guaranteed and there is no promise of profit.
-
-BUYBOT INFO:
-- TBP has an official BuyBot that posts every on-chain buy in real time in the TG group.
-  It shows USD value, POL/USDT amount, token amount, wallet short, NEW holder detection,
-  and the transaction link. This is an official TBP feature.
 
 DEVELOPMENT:
 - The developer is constantly upgrading TBP-AI, the security filters and the BuyBot.
@@ -477,7 +485,6 @@ RULES:
 - No financial advice, no price predictions.
 - Keep answers short, friendly, and factual. Light humor is OK.
 """
-
 
     # Nachrichten für OpenAI bauen
     messages = [
@@ -522,7 +529,6 @@ RULES:
         traceback.print_exc()
         return None
 
-
 def clean_answer(s: str) -> str:
     if not s:
         return ""
@@ -558,6 +564,7 @@ def autopost_text(lang="en"):
             "Was ist TBP? Meme-Token auf Polygon, echte AI-Antworten, 0% Tax, LP geburnt. Ziel: Community & Transparenz.",
             "What is TBP? Meme token on Polygon, real AI replies, 0% tax, LP burned. Goal: community & transparency."
         ),
+        "🪙 TBP-AI NFTs: Gold ($60) / Silver ($30) → " + LINKS["nfts"],
         "",
         f"• Sushi: {LINKS['buy']}",
         f"• Chart: {LINKS['dexscreener']}",
@@ -609,25 +616,11 @@ TOKEN_BUYBOT = {
     },
 }
 
-
 def fetch_pool_trades(network: str, pool_address: str, token_contract: str = "", limit: int = 25):
     """
     Holt die letzten Trades aus GeckoTerminal für ein Pool
     und normalisiert sie für den Buybot.
-
-    Wichtige Felder aus Gecko:
-      - kind               -> 'buy' / 'sell' (relativ zu einem Token, aber unklar)
-      - volume_in_usd      -> USD-Wert des Trades
-      - from_token_amount
-      - to_token_amount
-      - from_token_address
-      - to_token_address
-
-    Wir interpretieren:
-      - Wenn to_token_address == token_contract  -> BUY des Tokens
-      - Wenn from_token_address == token_contract-> SELL des Tokens
     """
-
     url = f"https://api.geckoterminal.com/api/v2/networks/{network}/pools/{pool_address}/trades"
 
     try:
@@ -659,33 +652,27 @@ def fetch_pool_trades(network: str, pool_address: str, token_contract: str = "",
         from_amt = _safe_float(attrs.get("from_token_amount"))
         to_amt   = _safe_float(attrs.get("to_token_amount"))
 
-        # --- SIDE-Logik: was ist BUY für TBP / C-Boost? ---
         side = kind
         token_amount = None
         quote_amount = None
 
         if token_contract:
-            # Wenn das Token auf der "to"-Seite steht -> wir bekommen Token = BUY
             if to_addr == token_contract:
                 side = "buy"
                 token_amount = to_amt
                 quote_amount = from_amt
-            # Wenn das Token auf der "from"-Seite steht -> wir geben Token ab = SELL
             elif from_addr == token_contract:
                 side = "sell"
                 token_amount = from_amt
                 quote_amount = to_amt
             else:
-                # Fallback, falls wir die Adresse nicht matchen konnten
                 token_amount = to_amt
                 quote_amount = from_amt
         else:
-            # Kein Contract bekannt -> wir nehmen einfach 'kind' und Mengen wie geliefert
             side = kind
             token_amount = to_amt
             quote_amount = from_amt
 
-        # --- USD-Wert: volume_in_usd ist bei dir sichtbar ---
         usd = _safe_float(
             attrs.get("volume_in_usd")
             or attrs.get("trade_amount_usd")
@@ -711,10 +698,8 @@ def fetch_pool_trades(network: str, pool_address: str, token_contract: str = "",
             }
         )
 
-    # Gecko liefert neueste zuerst → drehen, damit ALT -> NEU sortiert
     trades.reverse()
     return trades
-
 
 def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
     usd = trade.get("usd")
@@ -723,7 +708,6 @@ def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
     wallet = trade.get("wallet")
     tx_hash = trade.get("tx_hash")
 
-    # Live-Daten nach dem Buy (Preis & MC)
     price_now, mc_now = get_tbp_price_and_mc()
     stats = get_market_stats() or {}
     vol_24h = stats.get("volume_24h")
@@ -776,7 +760,6 @@ def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
         tg_send_photo(chat_id, logo, caption=caption)
     else:
         tg_send(chat_id, caption, preview=True)
-
 
 def send_cboost_buy_alert(chat_id: int, trade: dict, is_new: bool):
     usd = trade.get("usd")
@@ -839,7 +822,6 @@ def send_cboost_buy_alert(chat_id: int, trade: dict, is_new: bool):
     else:
         tg_send(chat_id, caption, preview=True)
 
-
 def process_buybot_for(token_key: str, chat_id: int):
     cfg = TOKEN_BUYBOT.get(token_key)
     if not cfg:
@@ -860,13 +842,10 @@ def process_buybot_for(token_key: str, chat_id: int):
     if not hashes:
         return
 
-    # Beim ersten Start nur initialisieren, nichts posten
     if not last_hash:
-        state["last_hash"] = hashes[-1]  # letzter = neuester, weil wir reversed haben
+        state["last_hash"] = hashes[-1]
         return
 
-    # Wenn der letzte Hash nicht mehr in den letzten Trades ist (alte Seite),
-    # setzen wir einfach neu und posten nichts (verhindert Spam bei Restart).
     if last_hash not in hashes:
         state["last_hash"] = hashes[-1]
         return
@@ -899,7 +878,6 @@ def process_buybot_for(token_key: str, chat_id: int):
 
     state["last_hash"] = hashes[-1]
 
-
 def start_buybot_background():
     def loop():
         while True:
@@ -919,12 +897,12 @@ def start_buybot_background():
 # IDLE WATCHDOG – lebendiger Chat
 # =========================
 
-# Nur englische Sprüche, wie gewünscht
 IDLE_MESSAGES_TBP = [
     "Hello TBP crew, did you all fall asleep? We still have a moon to reach 🐸🚀",
     "It’s getting quiet… should I start buying TBP myself? 👀",
     "Reminder: you can sleep and work later – first we ride together to the moon with TBP! 🌕🔥",
     "Silence detected. Maybe it’s time for a fresh TBP meme? 😎",
+    "🪙 TBP-AI NFTs are live (Gold $60 / Silver $30). Mint here: https://quantumpepe.github.io/TBP-NFTs/ 🐸",
 ]
 
 IDLE_MESSAGES_CBOOST = [
@@ -935,12 +913,6 @@ IDLE_MESSAGES_CBOOST = [
 ]
 
 def start_idle_watchdog_background():
-    """
-    Prüft regelmäßig, ob ein Chat länger ruhig war.
-    - wenn > 10 Minuten keine Aktivität
-    - und seit der letzten Idle-Nachricht > 60 Minuten
-    → sendet einen zufälligen Idle-Spruch (TBP oder C-Boost abhängig vom Chat).
-    """
     def loop():
         while True:
             try:
@@ -956,7 +928,6 @@ def start_idle_watchdog_background():
                     prev_idle_time = last_idle.get(chat_id)
                     idle_diff = (now - prev_idle_time).total_seconds() if prev_idle_time else 999999
 
-                    # > 600 Sekunden (10 Min) ruhig, und letzte Idle-Nachricht > 3600 Sekunden her
                     if diff > 600 and idle_diff > 3600:
                         if CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID:
                             msg = random.choice(IDLE_MESSAGES_CBOOST)
@@ -1114,6 +1085,8 @@ def handle_extra_commands(text, chat_id, lang, is_cboost_chat, msg_id=None):
                 "Ich bin der offizielle KI-Assistent von TurboPepe-AI (TBP) auf Polygon.\n"
                 "Aktuell ist TBP ein Meme + AI Token mit gebrannter LP, 0% Tax, BuyBot und AI-Sicherheitsfiltern.\n"
                 "Ich erkläre das Projekt, Tokenomics, Sicherheit und die langfristige Vision – keine Finanzberatung.\n\n"
+                "🪙 <b>TBP-AI NFTs:</b> Gold ($60) & Silver ($30)\n"
+                f"🔗 {LINKS['nfts']}\n\n"
                 "📡 <b>Langfristige Idee:</b>\n"
                 "Wenn TBP eine stabile Market Cap (ca. 10M USD oder mehr) mit genug Liquidität erreicht, soll ein Teil\n"
                 "der Projektmittel in eigene High-Performance-Server und eine private KI fließen, die sich auf\n"
@@ -1122,6 +1095,8 @@ def handle_extra_commands(text, chat_id, lang, is_cboost_chat, msg_id=None):
                 "🇬🇧 I am the official AI assistant of TurboPepe-AI (TBP) on Polygon.\n"
                 "Right now TBP is a meme + AI token with burned LP, 0% tax, a buy bot and AI security filters.\n"
                 "I explain the project, tokenomics, security and the long term vision – no financial advice.\n\n"
+                "🪙 <b>TBP-AI NFTs:</b> Gold ($60) & Silver ($30)\n"
+                f"🔗 {LINKS['nfts']}\n\n"
                 "📡 <b>Long term idea:</b> If TBP reaches a sustainable market cap (around 10M USD or more, with enough\n"
                 "liquidity), part of the project funds can be used for own servers and a private AI system focused on\n"
                 "crypto and on-chain analysis. This fully depends on the success of TBP and the community and is NOT a\n"
@@ -1158,6 +1133,8 @@ def handle_extra_commands(text, chat_id, lang, is_cboost_chat, msg_id=None):
                 "• Stärkere AI-Sicherheitsfilter gegen Scams & Fremd-Promo\n"
                 "• Verbesserte Antworten (DE/EN) speziell für die Community\n"
                 "• Mehr Auto-Posts, Statistiken und AI-Tools rund um den Kryptomarkt\n\n"
+                "🪙 TBP-AI NFTs: Gold ($60) / Silver ($30) → "
+                f"{LINKS['nfts']}\n\n"
                 "Langfristig ist geplant, bei ausreichend Market Cap (ca. 10M USD+), eigene Server und eine\n"
                 "private KI-Infrastruktur rund um TBP aufzubauen – mit Fokus auf On-Chain-Analyse, Security\n"
                 "und Markt-Intelligenz für die Community. Das ist ein Ziel, keine Gewinn-Garantie.\n\n"
@@ -1166,6 +1143,8 @@ def handle_extra_commands(text, chat_id, lang, is_cboost_chat, msg_id=None):
                 "• Stronger AI security filters against scams & external promo\n"
                 "• Improved replies (DE/EN) tailored for the community\n"
                 "• More auto-posts, stats and AI tools around the crypto market\n\n"
+                "🪙 TBP-AI NFTs: Gold ($60) / Silver ($30) → "
+                f"{LINKS['nfts']}\n\n"
                 "Long term, if TBP reaches a solid market cap (around 10M USD+), the goal is to build own\n"
                 "servers and a private AI infrastructure around TBP, focused on on-chain analysis, security\n"
                 "and market intelligence for the community. This is a plan, not a profit guarantee.\n\n"
@@ -1230,6 +1209,8 @@ def telegram_webhook():
                     "• No paid CoinMarketCap / listing offers\n"
                     "• No promotion of other tokens / projects / groups\n"
                     "• Only official TBP links (website, Sushi, charts, scan, TG, X)\n\n"
+                    "🪙 TBP-AI NFTs are LIVE: Gold ($60) / Silver ($30)\n"
+                    f"Mint: {LINKS['nfts']}\n\n"
                     "Use /rules or /security to see all safety rules in English & Deutsch. 🐸"
                 )
 
@@ -1323,7 +1304,31 @@ def telegram_webhook():
         return jsonify({"ok": True})
 
     if low.startswith("/help"):
-        tg_send(chat_id, "/price • /stats • /chart • /links • /rules • /security • /id • /about • /dev", reply_to=msg_id, preview=False)
+        tg_send(chat_id, "/price • /stats • /chart • /links • /nfts • /rules • /security • /id • /about • /dev", reply_to=msg_id, preview=False)
+        return jsonify({"ok": True})
+
+    # ✅ NFTs Command + "nft" trigger (TBP only)
+    if low.startswith("/nfts") or (not low.startswith("/") and re.search(r"\bnft(s)?\b", low)):
+        if is_cboost_chat:
+            tg_send(
+                chat_id,
+                say(lang,
+                    "C-Boost NFTs gibt es aktuell nicht. Dieser Chat ist nur für C-Boost. ⚡",
+                    "There are no C-Boost NFTs right now. This chat is only for C-Boost. ⚡"
+                ),
+                reply_to=msg_id,
+                preview=False
+            )
+            return jsonify({"ok": True})
+
+        msg_nfts = (
+            "🪙 <b>TBP-AI NFTs are LIVE!</b>\n\n"
+            "🥇 <b>Gold NFT</b> — <b>$60</b>\n"
+            "🥈 <b>Silver NFT</b> — <b>$30</b>\n\n"
+            "✅ Mint on the official page (MetaMask / WalletConnect)\n"
+            f"🔗 <a href=\"{LINKS['nfts']}\">Open TBP NFT Mint Page</a>\n"
+        )
+        tg_send(chat_id, msg_nfts, reply_to=msg_id, preview=True)
         return jsonify({"ok": True})
 
     # NEU: /about & /dev
@@ -1384,7 +1389,7 @@ def telegram_webhook():
         tg_buttons(
             chat_id,
             say(lang, "Schnelle Links:", "Quick Links:"),
-            [("Sushi", LINKS["buy"]), ("Chart", LINKS["dexscreener"]), ("Scan", LINKS["contract_scan"]), ("Website", LINKS["website"])]
+            [("Sushi", LINKS["buy"]), ("Chart", LINKS["dexscreener"]), ("Scan", LINKS["contract_scan"]), ("Website", LINKS["website"]), ("NFTs", LINKS["nfts"])]
         )
         return jsonify({"ok": True})
 
@@ -1437,7 +1442,6 @@ def telegram_webhook():
 
         caption = "\n".join(lines) if lines else say(lang, "Keine Daten.", "No data.")
 
-        # 🐸 TBP-Logo anzeigen
         if TBP_LOGO_URL:
             tg_send_photo(
                 chat_id,
@@ -1453,7 +1457,6 @@ def telegram_webhook():
             )
 
         return jsonify({"ok": True})
-    
 
     if low.startswith("/stats"):
         if is_cboost_chat:
@@ -1555,52 +1558,31 @@ def telegram_webhook():
     if not low.startswith("/") and not is_admin(user_id):
         if is_illegal_offer(low):
             tg_delete_message(chat_id, msg_id)
-            if is_cboost_chat:
-                warn = say(
-                    lang,
-                    "⚠️ Illegale Angebote (Fake-Pässe, Drogen, Hacking-Services, gestohlene Daten usw.) sind in dieser C-Boost Gruppe strikt verboten. Deine Nachricht wurde entfernt.",
-                    "⚠️ Illegal offers (fake IDs, drugs, hacking services, stolen data, etc.) are strictly forbidden in this C-Boost group. Your message has been removed."
-                )
-            else:
-                warn = say(
-                    lang,
-                    "⚠️ Illegale Angebote (Fake-Pässe, Drogen, Hacking-Services, gestohlene Daten usw.) sind in diesem TBP-Chat strikt verboten. Deine Nachricht wurde entfernt.",
-                    "⚠️ Illegal offers (fake IDs, drugs, hacking services, stolen data, etc.) are strictly forbidden in this TBP chat. Your message has been removed."
-                )
+            warn = say(
+                lang,
+                "⚠️ Illegale Angebote sind hier strikt verboten. Deine Nachricht wurde entfernt.",
+                "⚠️ Illegal offers are strictly forbidden here. Your message has been removed."
+            )
             tg_send(chat_id, warn)
             return jsonify({"ok": True})
 
         if is_listing_scam(low):
             tg_delete_message(chat_id, msg_id)
-            if is_cboost_chat:
-                warn = say(
-                    lang,
-                    "⚠️ Angebote für bezahlte Listings / Fast-Track auf CMC sind in dieser C-Boost Gruppe nicht erlaubt. C-Boost setzt auf Transparenz und organisches Wachstum.",
-                    "⚠️ Paid listing / fast-track offers for CMC are not allowed in this C-Boost group. C-Boost focuses on transparency and organic growth."
-                )
-            else:
-                warn = say(
-                    lang,
-                    "⚠️ Angebote für bezahlte Listings / Fast-Track auf CMC sind in diesem Chat nicht erlaubt. TBP setzt auf Transparenz und organisches Wachstum.",
-                    "⚠️ Paid listing / fast-track offers for CMC are not allowed in this chat. TBP focuses on transparency and organic growth."
-                )
+            warn = say(
+                lang,
+                "⚠️ Bezahlte Listings / Fast-Track Angebote sind hier nicht erlaubt. Organisch only.",
+                "⚠️ Paid listing / fast-track offers are not allowed here. Organic only."
+            )
             tg_send(chat_id, warn)
             return jsonify({"ok": True})
 
         if is_external_promo(low):
             tg_delete_message(chat_id, msg_id)
-            if is_cboost_chat:
-                warn = say(
-                    lang,
-                    "⚠️ Externe Marketing- oder Promo-Angebote für andere Tokens / Projekte sind hier nicht erlaubt. Dieser Chat ist nur für C-Boost.",
-                    "⚠️ External marketing or promo offers for other tokens / projects are not allowed here. This chat is only for C-Boost."
-                )
-            else:
-                warn = say(
-                    lang,
-                    "⚠️ Externe Marketing- oder Promo-Angebote für andere Tokens / Projekte sind hier nicht erlaubt. Dieser Chat ist nur für TurboPepe-AI (TBP).",
-                    "⚠️ External marketing or promo offers for other tokens / projects are not allowed here. This chat is only for TurboPepe-AI (TBP)."
-                )
+            warn = say(
+                lang,
+                "⚠️ Externe Promo/Marketing für andere Projekte ist hier nicht erlaubt.",
+                "⚠️ External promo/marketing for other projects is not allowed here."
+            )
             tg_send(chat_id, warn)
             return jsonify({"ok": True})
 
@@ -1614,12 +1596,12 @@ def telegram_webhook():
     if not raw:
         raw = say(lang, "Netzwerkfehler. Versuch’s nochmal 🐸", "Network glitch. Try again 🐸")
 
-    wants_links = re.search(r"\b(link|links|buy|kaufen|chart|scan)\b", low)
+    wants_links = re.search(r"\b(link|links|buy|kaufen|chart|scan|nft|nfts)\b", low)
     if wants_links and mode == "tbp":
         tg_buttons(
             chat_id,
             clean_answer(raw),
-            [("Sushi", LINKS["buy"]), ("Chart", LINKS["dexscreener"]), ("Scan", LINKS["contract_scan"])]
+            [("Sushi", LINKS["buy"]), ("Chart", LINKS["dexscreener"]), ("Scan", LINKS["contract_scan"]), ("NFTs", LINKS["nfts"])]
         )
     else:
         tg_send(chat_id, clean_answer(raw), reply_to=msg_id, preview=False)
