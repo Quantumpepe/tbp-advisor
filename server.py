@@ -48,13 +48,13 @@ LINKS = {
     "contract_scan":f"https://polygonscan.com/token/{TBP_CONTRACT}",
 
     # ✅ NFTs
-    "nfts":         "https://quantumpepe.github.io/TBP-NFTs/",
+    "nfts":         "https://quantumpepe.github.io/NFTs-WalletConnectV2/",
 }
 
 # TBP Supply für grobe MC-Schätzung (nur Info, nicht kritisch)
 MAX_SUPPLY  = 190_000_000_000
 BURNED      = 10_000_000_000
-OWNER       = 14_000_000_000
+
 CIRC_SUPPLY = MAX_SUPPLY - BURNED - OWNER
 
 # ==== C-BOOST MARKET CONFIG (für Trades / Charts) ====
