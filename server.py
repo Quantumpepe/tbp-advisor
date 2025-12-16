@@ -187,6 +187,129 @@ def is_admin(user_id) -> bool:
     except Exception:
         return False
 
+# ==========================================================
+# OPTION D UPGRADE (Explain-first + Link-Routing + NFT split)
+# ==========================================================
+
+LINK_INTENT_KEYWORDS = [
+    "link", "links", "url", "website", "seite", "öffnen", "open",
+    "kaufen", "buy", "swap", "mint", "claim", "wo", "where",
+    "scan", "polygonscan", "etherscan", "chart", "dextools", "dexscreener"
+]
+
+EXPLAIN_FIRST_KEYWORDS = [
+    "what is", "was ist", "funktion", "function", "utility", "nutzen", "wofür",
+    "why", "warum", "wieso", "how", "wie", "explain", "erklär", "erkläre",
+    "purpose", "meaning", "future", "zukunft", "plan", "roadmap"
+]
+
+def _user_wants_links(text: str) -> bool:
+    t = (text or "").lower()
+    return any(k in t for k in LINK_INTENT_KEYWORDS)
+
+def _user_wants_explanation(text: str) -> bool:
+    t = (text or "").lower()
+    if "?" in t:
+        return True
+    return any(k in t for k in EXPLAIN_FIRST_KEYWORDS)
+
+NFT_GENERAL_KNOWLEDGE_DE = (
+    "NFTs (Non-Fungible Tokens) sind einzigartige digitale Token auf einer Blockchain. "
+    "Sie sind wie ein fälschungssicherer Besitznachweis für ein digitales Item (z.B. Kunst, Membership, Zugang/Benefits). "
+    "Jeder NFT hat eine Token-ID und Metadaten."
+)
+
+NFT_GENERAL_KNOWLEDGE_EN = (
+    "NFTs (Non-Fungible Tokens) are unique blockchain tokens. "
+    "They act like tamper-proof proof of ownership for a digital item (art, membership, access/benefits). "
+    "Each NFT has a token ID and metadata."
+)
+
+def build_nft_tbp_explain(lang: str) -> str:
+    return say(lang,
+        "🧠 <b>NFTs – kurz erklärt</b>\n"
+        f"{NFT_GENERAL_KNOWLEDGE_DE}\n\n"
+        "🛠 <b>TBP-AI NFTs (Utility)</b>\n"
+        "• Community-Support & Collectible\n"
+        "• Proof für spätere Vorteile (Rollen/Access/Airdrops)\n"
+        "• Mint ist transparent on-chain\n\n"
+        "🥇 Gold: <b>$60</b>\n"
+        "🥈 Silver: <b>$30</b>\n",
+        "🧠 <b>NFTs – quick explanation</b>\n"
+        f"{NFT_GENERAL_KNOWLEDGE_EN}\n\n"
+        "🛠 <b>TBP-AI NFTs (utility)</b>\n"
+        "• Community support & collectible\n"
+        "• Proof for future perks (roles/access/airdrops)\n"
+        "• Transparent on-chain mint\n\n"
+        "🥇 Gold: <b>$60</b>\n"
+        "🥈 Silver: <b>$30</b>\n"
+    )
+
+def build_nft_tbp_links(lang: str) -> str:
+    # Link only payload (used when user explicitly asks for link/where/how to mint)
+    return say(lang,
+        "🔗 <b>TBP-AI NFT Mint</b>\n",
+        "🔗 <b>TBP-AI NFT Mint</b>\n"
+    ) + f"{LINKS['nfts']}"
+
+def build_nft_cboost_explain(lang: str) -> str:
+    # Keep it minimal and honest (no false NFT claims for C-Boost)
+    return say(lang,
+        "🧠 NFTs sind einzigartige digitale Besitznachweise auf der Blockchain (Collectible/Membership/Access). "
+        "Wenn du willst, sag mir kurz: meinst du NFTs allgemein oder ein C-Boost Feature?",
+        "🧠 NFTs are unique digital ownership proofs on-chain (collectible/membership/access). "
+        "If you want, tell me: do you mean NFTs in general or a C-Boost feature?"
+    )
+
+def knowledge_router(text: str, lang: str, is_cboost_chat: bool, allow_links: bool = True) -> str:
+    """
+    Returns a fully-formed answer if we can handle it via stable knowledge (Explain-first & link routing).
+    Otherwise returns "" to continue normal flow.
+    """
+    t = (text or "").strip().lower()
+    if not t:
+        return ""
+
+    # NFT domain
+    if "nft" in t or "nfts" in t or "mint" in t or "gold" in t or "silver" in t:
+        wants_explain = _user_wants_explanation(t)
+        wants_links   = _user_wants_links(t)
+
+        if is_cboost_chat:
+            # C-Boost: only general explanation (unless you later add official C-Boost NFT links)
+            if wants_explain:
+                return build_nft_cboost_explain(lang)
+            if wants_links and allow_links:
+                return say(lang,
+                    "⚡ Für C-Boost habe ich aktuell keinen offiziellen NFT-Link im Bot hinterlegt. Meinst du TBP-NFTs?",
+                    "⚡ I don't have an official C-Boost NFT link stored in the bot right now. Did you mean TBP NFTs?"
+                )
+            return build_nft_cboost_explain(lang)
+
+        # TBP: explain-first, then optionally link
+        if wants_explain and not wants_links:
+            # Explanation only (no link-drop)
+            return build_nft_tbp_explain(lang) + say(lang,
+                "Wenn du den Mint-Link willst, sag einfach „Link“ oder „wo minten?“ 🙂",
+                "If you want the mint link, just say “link” or “where to mint?” 🙂"
+            )
+
+        if wants_explain and wants_links:
+            return build_nft_tbp_explain(lang) + "\n" + build_nft_tbp_links(lang)
+
+        # If they just say "NFT" without question:
+        # give short info + ask what they want
+        if not wants_links:
+            return say(lang,
+                "🪙 TBP-AI NFTs: 🥇 Gold $60 / 🥈 Silver $30. Willst du kurz die Utility hören oder den Mint-Link?",
+                "🪙 TBP-AI NFTs: 🥇 Gold $60 / 🥈 Silver $30. Do you want the utility or the mint link?"
+            )
+
+        if wants_links and allow_links:
+            return build_nft_tbp_links(lang)
+
+    return ""
+
 # -------------------------
 # Reply policy (MORE HUMAN)
 # -------------------------
@@ -592,12 +715,17 @@ def get_user_notes(chat_id: int, user_id: int):
 def faq_reply(text: str, lang: str, is_cboost_chat: bool) -> str:
     t = (text or "").lower().strip()
 
+    # ✅ Option D: knowledge router first (prevents link-only answers)
+    kr = knowledge_router(text, lang, is_cboost_chat, allow_links=True)
+    if kr:
+        return kr
+
     if not is_cboost_chat:
         # =========================
         # TBP FAQ
         # =========================
 
-        # ✅ TBP PLAN / ROADMAP shortcut (Fix für "tell me the plan", "future", etc.)
+        # ✅ TBP PLAN / ROADMAP shortcut
         if any(k in t for k in ["plan", "roadmap", "zukunft", "future"]) and any(k in t for k in ["tbp", "turbopepe", "nft", "ai", "bot", "project"]):
             return say(lang,
                 "🧭 <b>TBP Plan (kurz)</b>\n"
@@ -612,39 +740,6 @@ def faq_reply(text: str, lang: str, is_cboost_chat: bool) -> str:
                 "3) Keep upgrading the AI (better replies + tools)\n"
                 "4) More visibility (trackers/listings when organic)\n\n"
                 "Do you want <b>NFT future</b> or <b>AI future</b> in more detail? 🙂"
-            )
-
-        # ✅ NFT - Erklärung (Fix: Future/Plan/Roadmap triggert Erklärung, nicht nur Link)
-        if ("nft" in t) and any(k in t for k in ["was ist","what is","funktion","function","utility","nutzen","wofür","future","zukunft","plan","roadmap","wieso","warum"]):
-            return say(lang,
-                "🧠 <b>Was ist ein NFT?</b>\n"
-                "Ein NFT ist ein <b>digitaler Besitznachweis</b> auf der Blockchain – einzigartig, nicht wie normale Coins austauschbar.\n\n"
-                "🛠 <b>Wofür sind TBP-AI NFTs?</b>\n"
-                "• Community-Support & Sammelobjekt\n"
-                "• Proof für spätere Vorteile (Rollen/Access/Airdrops)\n"
-                "• Transparenter Mint on-chain (jeder kann’s prüfen)\n\n"
-                "🚀 <b>Future / Plan:</b>\n"
-                "Später kann man damit z.B. spezielle Rollen, Zugang zu Tools/Alpha-Features oder Community-Perks verbinden.\n\n"
-                f"✅ Mint-Seite: {LINKS['nfts']}",
-                "🧠 <b>What is an NFT?</b>\n"
-                "An NFT is a <b>unique digital ownership proof</b> on the blockchain.\n\n"
-                "🛠 <b>What are TBP-AI NFTs for?</b>\n"
-                "• Community support & collectible\n"
-                "• Proof for future perks (roles/access/airdrops)\n"
-                "• Transparent on-chain mint\n\n"
-                "🚀 <b>Future / plan:</b>\n"
-                "Later it can be linked to roles, tool access, alpha features, and community perks.\n\n"
-                f"✅ Mint page: {LINKS['nfts']}"
-            )
-
-        # 2) NFT Mint / Preise / “NFTs” (Shortcut)
-        if WORD_NFT.search(t) or "mint" in t:
-            return (
-                "🪙 <b>TBP-AI NFTs</b>\n"
-                "🥇 Gold: <b>$60</b>\n"
-                "🥈 Silver: <b>$30</b>\n"
-                "✅ Mint (MetaMask / WalletConnect):\n"
-                f"👉 <a href=\"{LINKS['nfts']}\">Open TBP NFT Mint Page</a>"
             )
 
         # 3) LP burned?
@@ -1255,7 +1350,12 @@ def ask():
         return jsonify({"answer": "empty question"}), 200
 
     lang = "de" if is_de(q) else "en"
-    if WORD_PRICE.search(q):
+
+    # ✅ Option D: Explain-first knowledge layer also for web
+    kr = knowledge_router(q, lang, is_cboost_chat=False, allow_links=True)
+    if kr:
+        ans = kr
+    elif WORD_PRICE.search(q):
         p = get_live_price()
         stats = get_market_stats() or {}
         lines = []
@@ -1285,8 +1385,15 @@ def ask_cboost():
     if not q:
         return jsonify({"answer": "empty question"}), 200
 
-    raw = call_openai(q, MEM["ctx"], mode="cboost") or "Network glitch. Try again ⚡"
-    ans = clean_answer(raw)
+    lang = "de" if is_de(q) else "en"
+
+    # ✅ Option D: Explain-first for C-Boost web too (general NFT knowledge, no fake links)
+    kr = knowledge_router(q, lang, is_cboost_chat=True, allow_links=False)
+    if kr:
+        ans = kr
+    else:
+        raw = call_openai(q, MEM["ctx"], mode="cboost") or "Network glitch. Try again ⚡"
+        ans = clean_answer(raw)
 
     MEM["ctx"].append(f"You: {q}")
     MEM["ctx"].append(f"C-Boost: {ans}")
@@ -1394,12 +1501,7 @@ def telegram_webhook():
 
     # ✅ FIX: Nur "?" / "!!" / "..." NICHT an AI schicken
     if text and re.fullmatch(r"[?\.\!]+", text):
-        # Option A: komplett ignorieren (weniger Spam)
         return jsonify({"ok": True})
-        # Option B (wenn du lieber Rückfrage willst):
-        # lang = "de" if is_de(text) else "en"
-        # tg_send(chat_id, say(lang, "Meinst du NFTs, Preis oder Roadmap? 🙂", "Do you mean NFTs, price, or roadmap? 🙂"), reply_to=msg_id)
-        # return jsonify({"ok": True})
 
     is_cboost_chat = bool(CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID)
 
@@ -1680,37 +1782,26 @@ def telegram_webhook():
             return jsonify({"ok": True})
 
     # =========================
-    # NFT EXPLANATION (human) — FIX: Future/Plan/Roadmap inkludiert
+    # OPTION D: Knowledge router BEFORE old NFT block
+    # (keeps everything, but prevents "only link" behavior)
     # =========================
-    if "nft" in low and any(k in low for k in ["funktion","function","utility","use","wofür","was ist","what is","future","zukunft","plan","roadmap"]):
-        tg_typing(chat_id)
-        time.sleep(random.uniform(0.6, 1.4))
-        tg_send(
-            chat_id,
-            say(lang,
-                "🧠 <b>Was ist die Funktion eines NFTs?</b>\n\n"
-                "Ein NFT ist ein <b>digitaler Besitznachweis</b> – einzigartig & on-chain überprüfbar.\n\n"
-                "🛠 <b>TBP-AI NFTs:</b>\n"
-                "• Community-Support & Collectible\n"
-                "• Proof für spätere Vorteile\n"
-                "• Transparenter Mint on-chain\n\n"
-                "🚀 <b>Future:</b>\n"
-                "Später kann man damit Rollen/Access, Tools, Airdrops oder Perks verbinden.\n\n"
-                f"🔗 Mint: {LINKS['nfts']}",
-                "🧠 <b>What is the function of an NFT?</b>\n\n"
-                "An NFT is <b>unique digital ownership proof</b> on-chain.\n\n"
-                "🛠 <b>TBP-AI NFTs:</b>\n"
-                "• Community support & collectible\n"
-                "• Proof for future benefits\n"
-                "• Transparent on-chain mint\n\n"
-                "🚀 <b>Future:</b>\n"
-                "Later it can be linked to roles/access, tools, airdrops, and perks.\n\n"
-                f"🔗 Mint: {LINKS['nfts']}"
-            ),
-            reply_to=msg_id,
-            preview=False
-        )
-        return jsonify({"ok": True})
+    if not low.startswith("/"):
+        kr = knowledge_router(text, lang, is_cboost_chat, allow_links=True)
+        if kr:
+            tg_typing(chat_id)
+            time.sleep(random.uniform(0.6, 1.4))
+            # If user wants links and it is TBP: show buttons too (nicer UX)
+            if (not is_cboost_chat) and _user_wants_links(text):
+                tg_buttons(
+                    chat_id,
+                    kr,
+                    [("NFTs", LINKS["nfts"]), ("Chart", LINKS["dexscreener"]), ("Sushi", LINKS["buy"]), ("Scan", LINKS["contract_scan"])]
+                )
+            else:
+                tg_send(chat_id, kr, reply_to=msg_id, preview=False)
+            if WORD_NFT.search(low):
+                note_user(chat_id, user_id or 0, "interested_nfts")
+            return jsonify({"ok": True})
 
     # =========================
     # FAST FAQ SHORTCUTS
@@ -1775,6 +1866,8 @@ def telegram_webhook():
     enriched_q = (
         "Answer as a Telegram community member.\n"
         "Keep it short (1-4 sentences), unless user asks for details.\n"
+        "If user asks general concept questions (e.g., NFTs), explain first, then optionally relate to the project.\n"
+        "Do NOT drop links unless user asks for link/where/buy/mint/scan/chart.\n"
         "No price predictions. No financial advice.\n\n"
         f"{note_txt}\n\n"
         "CHAT CONTEXT (latest lines):\n"
