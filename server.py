@@ -1482,17 +1482,7 @@ def telegram_webhook():
         )
         return jsonify({"ok": True})
 
-    # NFTs command + trigger (TBP only)
-    if low.startswith("/nfts") or (not low.startswith("/") and WORD_NFT.search(low) and not is_cboost_chat):
-        msg_nfts = (
-            "🪙 <b>TBP-AI NFTs are LIVE!</b>\n\n"
-            "🥇 <b>Gold NFT</b> — <b>$60</b>\n"
-            "🥈 <b>Silver NFT</b> — <b>$30</b>\n\n"
-            "✅ Mint on the official page (MetaMask / WalletConnect)\n"
-            f"🔗 <a href=\"{LINKS['nfts']}\">Open TBP NFT Mint Page</a>\n"
-        )
-        tg_send(chat_id, msg_nfts, reply_to=msg_id, preview=True)
-        return jsonify({"ok": True})
+    
 
     # PRICE / STATS / CHART
     if low.startswith("/price") or (not low.startswith("/") and WORD_PRICE.search(low)):
