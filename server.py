@@ -590,35 +590,57 @@ def get_user_notes(chat_id: int, user_id: int):
 # =========================
 
 def faq_reply(text: str, lang: str, is_cboost_chat: bool) -> str:
-    t = (text or "").lower()
+    t = (text or "").lower().strip()
 
     if not is_cboost_chat:
+        # =========================
         # TBP FAQ
-        # FIX: NFT-FAQ nur bei Mint / Preis / Kaufen
-    
-       if WORD_NFT.search(t) and ("mint" in t or "buy" in t or "kaufen" in t or "preis" in t or "price" in t):
+        # =========================
+
+        # 1) NFT - Erklärung (nicht nur Link!)
+        if ("nft" in t) and any(k in t for k in ["was ist", "what is", "funktion", "function", "utility", "nutzen", "wofür"]):
+            return say(lang,
+                "🧠 <b>Was ist ein NFT?</b>\n"
+                "Ein NFT (Non-Fungible Token) ist ein <b>digitaler Besitznachweis</b> auf der Blockchain – einzigartig, nicht austauschbar wie normale Coins.\n\n"
+                "🛠 <b>Wofür sind TBP-AI NFTs?</b>\n"
+                "• Community-Support & Sammelobjekt\n"
+                "• Zugang/Proof (später erweiterbar: Perks, Rollen, Whitelists)\n"
+                "• Transparenter Mint on-chain (jeder kann prüfen)\n\n"
+                f"✅ Mint-Seite: {LINKS['nfts']}"
+            )
+
+        # 2) NFT Mint / Preise / “NFTs” (Shortcut)
+        if WORD_NFT.search(t) or "mint" in t:
             return (
                 "🪙 <b>TBP-AI NFTs</b>\n"
                 "🥇 Gold: <b>$60</b>\n"
-                "🥈 Silver: <b>$30</b>\n\n"
+                "🥈 Silver: <b>$30</b>\n"
                 "✅ Mint (MetaMask / WalletConnect):\n"
-                f"🔗 <a href=\"{LINKS['nfts']}\">Open TBP NFT Mint Page</a>"
+                f"👉 <a href=\"{LINKS['nfts']}\">Open TBP NFT Mint Page</a>"
             )
+
+        # 3) LP burned?
         if "lp" in t and ("burn" in t or "burned" in t or "geburn" in t):
             return say(lang,
                 "✅ TBP: LP ist geburnt (dauerhaft). Das reduziert Rug-Risiko deutlich.",
                 "✅ TBP: LP is burned (permanent). This strongly reduces rug risk."
             )
+
+        # 4) Owner renounced?
         if "owner" in t or "renounce" in t or "renounced" in t or "besitzer" in t:
             return say(lang,
                 "✅ TBP: Owner ist renounced (keine versteckten Owner-Backdoors).",
                 "✅ TBP: Owner is renounced (no hidden owner backdoors)."
             )
+
+        # 5) Tax?
         if "tax" in t or "steuer" in t or "0%" in t or "0 tax" in t:
             return say(lang,
                 "✅ TBP hat <b>0% Tax</b>. Keine Buy/Sell-Steuer.",
                 "✅ TBP has <b>0% tax</b>. No buy/sell tax."
             )
+
+        # 6) Links
         if WORD_LINKS.search(t):
             return (
                 say(lang, "🔗 <b>TBP Links</b>\n", "🔗 <b>TBP Links</b>\n") +
@@ -629,15 +651,19 @@ def faq_reply(text: str, lang: str, is_cboost_chat: bool) -> str:
                 f"• NFTs: {LINKS['nfts']}"
             )
 
+        return ""
+
     else:
-        # C-Boost FAQ
+        # =========================
+        # C-Boost FAQ (kurz)
+        # =========================
         if WORD_LINKS.search(t) or WORD_PRICE.search(t):
             return say(lang,
-                "⚡ C-Boost: Nutze /price oder /chart für Live-Daten. Für Fragen zu Vision/Utility: einfach fragen 🙂",
+                "⚡ C-Boost: Nutze /price oder /chart für Live-Daten. Für Vision/Utility Fragen: einfach fragen 🙂",
                 "⚡ C-Boost: Use /price or /chart for live data. For vision/utility questions: just ask 🙂"
             )
+        return ""
 
-    return ""
 
 # =========================
 # OPENAI
