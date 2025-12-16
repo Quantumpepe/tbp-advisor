@@ -63,7 +63,130 @@ CBOOST_NETWORK       = os.environ.get("CBOOST_NETWORK", "polygon_pos").strip() o
 CBOOST_POOL_ADDRESS  = os.environ.get("CBOOST_POOL_ADDRESS", CBOOST_PAIR).strip()
 
 # =========================
-# MEMORY / STATE
+# SHARED MEMORY + STATE (TG + WEB)
+# =========================
+MEMORY_FILE = "tbp_shared_memory.json"
+STATE_LOCK = threading.Lock()
+
+SHARED = {
+    "state": {
+        "community_mode": "neutral",   # neutral | nervous | hype | calm
+        "answer_mode": "balanced",     # short | balanced | deep
+        "last_update": None
+    },
+    "stats": {
+        "faq_counts": {},              # question_key -> count
+        "recent_topics": []            # last topics
+    },
+    "recent": {
+        "events": []                   # list of dicts
+    }
+}
+
+def _now_iso():
+    return datetime.utcnow().isoformat() + "Z"
+
+def load_shared():
+    global SHARED
+    try:
+        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            # shallow update
+            for k, v in data.items():
+                if isinstance(v, dict) and isinstance(SHARED.get(k), dict):
+                    SHARED[k].update(v)
+                else:
+                    SHARED[k] = v
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+def save_shared():
+    try:
+        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(SHARED, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def normalize_question_key(text: str) -> str:
+    t = (text or "").strip().lower()
+    t = re.sub(r"https?://\S+", "", t)
+    t = re.sub(r"[^a-z0-9äöüß\s]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t[:80] if t else "empty"
+
+def detect_shared_topic(text: str) -> str:
+    t = (text or "").lower()
+    if "nft" in t or "mint" in t or "gold" in t or "silver" in t:
+        return "nft"
+    if "price" in t or "preis" in t or "kurs" in t or "chart" in t or "mc" in t or "market cap" in t:
+        return "market"
+    if "liq" in t or "liquidity" in t or "lp" in t:
+        return "liquidity"
+    if "stake" in t or "staking" in t:
+        return "staking"
+    if "buy" in t or "kaufen" in t or "swap" in t:
+        return "buy"
+    if "scam" in t or "rug" in t or "honeypot" in t or "betrug" in t:
+        return "risk"
+    return "general"
+
+def update_shared(channel: str, user_id: str, text: str, sentiment_hint: str = None):
+    key = normalize_question_key(text)
+    topic = detect_shared_topic(text)
+    ts = _now_iso()
+
+    with STATE_LOCK:
+        SHARED.setdefault("stats", {}).setdefault("faq_counts", {})
+        SHARED["stats"]["faq_counts"][key] = SHARED["stats"]["faq_counts"].get(key, 0) + 1
+
+        SHARED.setdefault("stats", {}).setdefault("recent_topics", [])
+        SHARED["stats"]["recent_topics"].append(topic)
+        SHARED["stats"]["recent_topics"] = SHARED["stats"]["recent_topics"][-30:]
+
+        SHARED.setdefault("recent", {}).setdefault("events", [])
+        SHARED["recent"]["events"].append({
+            "ts": ts, "ch": channel, "uid": str(user_id)[:64],
+            "topic": topic, "key": key
+        })
+        SHARED["recent"]["events"] = SHARED["recent"]["events"][-60:]
+
+        # Optional: simple sentiment auto (very safe)
+        if sentiment_hint in ("nervous", "hype", "calm", "neutral"):
+            SHARED.setdefault("state", {})["community_mode"] = sentiment_hint
+
+        SHARED.setdefault("state", {})["last_update"] = ts
+
+        save_shared()
+
+def get_shared_snapshot():
+    with STATE_LOCK:
+        faq = SHARED.get("stats", {}).get("faq_counts", {}) or {}
+        top_faq = sorted(faq.items(), key=lambda x: x[1], reverse=True)[:5]
+        return {
+            "state": SHARED.get("state", {}),
+            "top_faq": top_faq,
+            "recent_topics": (SHARED.get("stats", {}).get("recent_topics", []) or [])[-10:],
+            "recent_events": (SHARED.get("recent", {}).get("events", []) or [])[-10:]
+        }
+
+# load on startup
+load_shared()
+
+# =========================
+# UNIVERSAL INCOMING HOOK (TG + WEB)
+# =========================
+def on_incoming_message(channel: str, user_id: str, text: str):
+    try:
+        if text:
+            update_shared(channel=channel, user_id=str(user_id), text=text)
+    except Exception:
+        pass
+
+# =========================
+# MEMORY / STATE (legacy in-process)
 # =========================
 
 MEM = {
@@ -550,14 +673,11 @@ def should_interject(chat_id: int, is_cboost_chat: bool) -> bool:
     if len(lines) < TOPIC_MIN_LINES:
         return False
 
-    # topic density
     labels = [detect_topic_label(x["text"]) for x in lines]
-    # find most common
     common = max(set(labels), key=labels.count)
     if labels.count(common) < TOPIC_MIN_LINES:
         return False
 
-    # if common is too generic, skip
     if common == "chat":
         return False
 
@@ -664,7 +784,6 @@ def faq_reply(text: str, lang: str, is_cboost_chat: bool) -> str:
             )
         return ""
 
-
 # =========================
 # OPENAI
 # =========================
@@ -728,6 +847,20 @@ VISION:
 - Be clear what exists today vs future plans. No guarantees.
 """
 
+    # ✅ Inject shared snapshot so BOTH bots behave consistently
+    try:
+        shared = get_shared_snapshot()
+        shared_ctx = (
+            "\n\n[SHARED_STATE]\n"
+            f"community_mode: {shared.get('state', {}).get('community_mode')}\n"
+            f"answer_mode: {shared.get('state', {}).get('answer_mode')}\n"
+            f"top_faq: {shared.get('top_faq')}\n"
+            f"recent_topics: {shared.get('recent_topics')}\n"
+        )
+        system_msg += shared_ctx
+    except Exception:
+        pass
+
     messages = [
         {"role": "system", "content": system_msg},
         {"role": "user", "content": question},
@@ -765,13 +898,11 @@ def clean_answer(s: str) -> str:
         return ""
     s = re.sub(r"(?i)(financial advice|finanzberatung)", "information", s)
     s = s.strip()
-    # reduce overly long outputs a bit
     if len(s) > 1200:
         s = s[:1200].rstrip() + "…"
     return s
 
 def human_delay_for(text: str):
-    # typing + delay based on length
     ln = len(text or "")
     if ln < 80:
         time.sleep(random.uniform(0.4, 1.0))
@@ -1194,6 +1325,11 @@ def root():
 def health():
     return jsonify({"ok": True})
 
+@app.get("/api/shared")
+def api_shared():
+    # optional endpoint (debug / frontend)
+    return jsonify(get_shared_snapshot())
+
 @app.route("/admin/set_webhook")
 def admin_set_webhook():
     key = request.args.get("key", "")
@@ -1229,6 +1365,10 @@ def ask():
     if not q:
         return jsonify({"answer": "empty question"}), 200
 
+    # ✅ Shared Memory (WEB)
+    uid = request.headers.get("X-Forwarded-For", request.remote_addr) or "web"
+    on_incoming_message(channel="web", user_id=str(uid), text=q)
+
     lang = "de" if is_de(q) else "en"
     if WORD_PRICE.search(q):
         p = get_live_price()
@@ -1259,6 +1399,10 @@ def ask_cboost():
     q = (data.get("question") or "").strip()
     if not q:
         return jsonify({"answer": "empty question"}), 200
+
+    # ✅ Shared Memory (WEB)
+    uid = request.headers.get("X-Forwarded-For", request.remote_addr) or "web"
+    on_incoming_message(channel="web", user_id=str(uid), text=q)
 
     raw = call_openai(q, MEM["ctx"], mode="cboost") or "Network glitch. Try again ⚡"
     ans = clean_answer(raw)
@@ -1350,6 +1494,10 @@ def telegram_webhook():
     msg_id  = msg.get("message_id")
     new_members = msg.get("new_chat_members") or []
 
+    # ✅ Shared Memory (TG) — wichtigste Stelle
+    if chat_id and text:
+        on_incoming_message(channel="tg", user_id=str(chat_id), text=text)
+
     reply_to = msg.get("reply_to_message") or {}
     replied_to_bot = False
     try:
@@ -1436,7 +1584,6 @@ def telegram_webhook():
         return jsonify({"ok": True})
 
     if not text:
-        # Maybe interject if conversation is strong (but no text -> nothing)
         return jsonify({"ok": True})
 
     low  = text.lower()
@@ -1509,8 +1656,6 @@ def telegram_webhook():
             [("Sushi", LINKS["buy"]), ("Chart", LINKS["dexscreener"]), ("Scan", LINKS["contract_scan"]), ("Website", LINKS["website"]), ("NFTs", LINKS["nfts"])]
         )
         return jsonify({"ok": True})
-
-    
 
     # PRICE / STATS / CHART
     if low.startswith("/price") or (not low.startswith("/") and WORD_PRICE.search(low)):
@@ -1647,6 +1792,7 @@ def telegram_webhook():
                 f"⚠️ External promo for other projects is not allowed here. (Strike {strike}/3)"
             ))
             return jsonify({"ok": True})
+
     # =========================
     # NFT EXPLANATION (human)
     # =========================
@@ -1678,7 +1824,7 @@ def telegram_webhook():
             preview=False
         )
         return jsonify({"ok": True})
-  
+
     # =========================
     # FAST FAQ SHORTCUTS
     # =========================
@@ -1688,7 +1834,6 @@ def telegram_webhook():
             tg_typing(chat_id)
             human_delay_for(fast)
             tg_send(chat_id, fast, reply_to=msg_id, preview=True)
-            # note user interest
             if WORD_NFT.search(low):
                 note_user(chat_id, user_id or 0, "interested_nfts")
             if WORD_PRICE.search(low):
@@ -1698,14 +1843,11 @@ def telegram_webhook():
     # =========================
     # SMART INTERJECTION (Conversation Watcher)
     # =========================
-    # If user did NOT call bot directly, we can still interject when topic is strong (and not spamming).
-    # Only if message is not command, and not a direct reply-to-bot.
     if not low.startswith("/") and not replied_to_bot:
         if should_interject(chat_id, is_cboost_chat):
             topic = MEM["chat_topic"].get(chat_id, "chat")
             MEM["last_interject"][chat_id] = datetime.utcnow()
 
-            # build a short interjection prompt using chat context
             ctx = build_chat_context_block(chat_id)
             notes = get_user_notes(chat_id, user_id or 0)
             note_txt = f"User notes: {', '.join(notes)}" if notes else "User notes: none"
@@ -1723,7 +1865,6 @@ def telegram_webhook():
             )
 
             tg_typing(chat_id)
-            # delay like human
             time.sleep(random.uniform(0.7, 1.6))
             mode = "cboost" if is_cboost_chat else "tbp"
             raw = call_openai(interject_q, [], mode=mode)
@@ -1740,7 +1881,6 @@ def telegram_webhook():
 
     mode = "cboost" if is_cboost_chat else "tbp"
 
-    # Build richer question with chat context, so it answers the topic naturally
     ctx = build_chat_context_block(chat_id)
     notes = get_user_notes(chat_id, user_id or 0)
     note_txt = f"User notes: {', '.join(notes)}" if notes else "User notes: none"
@@ -1765,7 +1905,6 @@ def telegram_webhook():
 
     out = clean_answer(raw)
 
-    # If user explicitly asks for links/buttons
     wants_links = bool(re.search(r"\b(link|links|buy|kaufen|chart|scan|website)\b", low))
     if wants_links and mode == "tbp":
         human_delay_for(out)
@@ -1778,7 +1917,6 @@ def telegram_webhook():
         human_delay_for(out)
         tg_send(chat_id, out, reply_to=msg_id, preview=False)
 
-    # light notes
     if WORD_NFT.search(low):
         note_user(chat_id, user_id or 0, "interested_nfts")
     if WORD_PRICE.search(low):
