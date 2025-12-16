@@ -3,6 +3,8 @@
 
 import os, re, json, time, threading, random
 from datetime import datetime, timedelta
+from collections import defaultdict, deque
+
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -82,6 +84,74 @@ MEM = {
     "last_idle": {},            # chat_id -> datetime (letzte Idle-Nachricht)
 }
 
+# =========================
+# HUMAN CHAT ENGINE (Context + Memory + Typing)
+# =========================
+
+CHAT_CTX = defaultdict(lambda: deque(maxlen=14))   # chat_id -> last messages
+USER_MEM = defaultdict(lambda: deque(maxlen=8))    # user_id -> short notes
+
+OPENERS = ["Ok 🙂", "Yep.", "Verstanden.", "Kurz:", "Alright—", "Hm, ja."]
+CLOSERS = ["", "Willst du ein kurzes Beispiel?", "Soll ich’s genauer erklären?", "Wenn du willst: Schritt-für-Schritt."]
+
+def remember_chat(chat_id: int, role: str, text: str):
+    t = (text or "").strip()
+    if not t:
+        return
+    t = re.sub(r"\s+", " ", t)[:800]
+    CHAT_CTX[chat_id].append({"role": role, "text": t})
+
+def remember_user(user_id: int, note: str):
+    n = (note or "").strip()
+    if not n:
+        return
+    if n in USER_MEM[user_id]:
+        return
+    USER_MEM[user_id].append(n[:120])
+
+def build_context(chat_id: int, user_id: int) -> str:
+    parts = []
+    if USER_MEM[user_id]:
+        parts.append("User notes:\n- " + "\n- ".join(list(USER_MEM[user_id])))
+    if CHAT_CTX[chat_id]:
+        parts.append("Recent chat:\n" + "\n".join(
+            [f"{m['role']}: {m['text']}" for m in CHAT_CTX[chat_id]]
+        ))
+    return "\n\n".join(parts).strip()
+
+def wants_detail(text: str) -> bool:
+    t = (text or "").lower()
+    triggers = ["genauer", "details", "erklär", "explain", "how", "guide", "tutorial", "step by step", "warum", "wieso"]
+    return any(x in t for x in triggers)
+
+def spice_reply(txt: str) -> str:
+    t = (txt or "").strip()
+    if not t:
+        return t
+    if random.random() < 0.22:
+        t = random.choice(OPENERS) + " " + t
+    if random.random() < 0.18:
+        t = t + " " + random.choice(CLOSERS)
+    return t.strip()
+
+def tg_typing(chat_id: int):
+    token = _choose_token_for_chat(chat_id)
+    if not token:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendChatAction",
+            json={"chat_id": chat_id, "action": "typing"},
+            timeout=6
+        )
+    except Exception:
+        pass
+
+def human_delay(text: str):
+    n = len((text or ""))
+    base = 0.35 + min(n / 280.0, 1.9)
+    time.sleep(base + random.uniform(0.0, 0.65))
+
 # Regexe
 WORD_PRICE = re.compile(r"\b(preis|price|kurs|chart|charts)\b", re.I)
 GER_DET    = re.compile(r"\b(der|die|das|und|nicht|warum|wie|kann|preis|kurs|listung|tokenomics)\b", re.I)
@@ -113,7 +183,7 @@ ILLEGAL_OFFER_PATTERNS = [
     # Drogenverkauf
     r"\b(verkaufe|verkauf|biete|liefere)\s+(drogen|koks|kokain|gras|weed|hanf|mdma|xtc|lsd)\b",
     # Hacking / DDoS Services
-    r"\b(verkaufe|biete|mache)\s+(hacking|ddos|doxxing|botnet|hack)\s*(service|dienst|dienstleistung|angriff)?\b",
+    r"\b(verkaufe|biete|mache)\s+(hacking|ddos|doxxing|botnet|hack)\s*(service|dienst|dienst|dienstleistung|angriff)?\b",
     r"\b(suche|brauche)\s+jemanden\s+der\s+(hacken|ddos|accounts knackt|websites angreift)\b",
     # Gestohlene Daten / Karten
     r"\b(verkaufe|biete)\s+(gestohlene[nr]?|geklaute[nr]?)\s+(daten|kreditkarten|karten|accounts|konten)\b",
@@ -407,7 +477,7 @@ def get_cboost_live_data():
 # OpenAI
 # ------------------------
 
-def call_openai(question: str, context, mode: str = "tbp"):
+def call_openai(question: str, context, mode: str = "tbp", chat_ctx: str = "", short: bool = True):
     # Debug: prüfen, ob Key vorhanden
     print("DEBUG call_openai: mode =", mode)
     print("DEBUG call_openai: OPENAI_API_KEY set =", bool(OPENAI_API_KEY))
@@ -421,6 +491,13 @@ def call_openai(question: str, context, mode: str = "tbp"):
     if mode == "cboost":
         system_msg = """You are C-BoostAI, the official assistant of the C-Boost micro supply token on Polygon.
 You must ALWAYS answer in the user's language (German or English). Detect language automatically.
+
+CHAT STYLE (IMPORTANT):
+- Sound like a real Telegram member, not a formal bot.
+- Default length: 1–4 short sentences. Only go long if the user asks for details.
+- Use at most 1 emoji sometimes (not every message).
+- No repeating the user. No unnecessary disclaimers.
+- If the question is generic (e.g. NFT), explain generally first. Only relate to the project if asked.
 
 PROJECT INFO:
 - C-Boost is a next-generation MICRO SUPPLY token on Polygon.
@@ -447,6 +524,13 @@ RULES:
     else:
         system_msg = """You are TBP-AI, the official assistant of TurboPepe-AI (TBP) on Polygon.
 You must ALWAYS answer in the user's language (German or English). Detect language automatically.
+
+CHAT STYLE (IMPORTANT):
+- Sound like a real Telegram member, not a formal bot.
+- Default length: 1–4 short sentences. Only go long if the user asks for details.
+- Use at most 1 emoji sometimes (not every message).
+- No repeating the user. No unnecessary disclaimers.
+- If the question is generic (e.g. NFT), explain generally first. Only relate to the project if asked.
 
 CURRENT PROJECT:
 - TBP is a community-driven meme + AI token on Polygon.
@@ -487,9 +571,15 @@ RULES:
 - Keep answers short, friendly, and factual. Light humor is OK.
 """
 
-    # Nachrichten für OpenAI bauen
+    style_hint = "Be SHORT." if short else "Be DETAILED."
+    ctx_block = ""
+    if chat_ctx:
+        ctx_block = f"\n\nEXTRA CONTEXT (recent chat):\n{chat_ctx}\n\nInstruction: {style_hint}\n"
+    else:
+        ctx_block = f"\n\nInstruction: {style_hint}\n"
+
     messages = [
-        {"role": "system", "content": system_msg},
+        {"role": "system", "content": system_msg + ctx_block},
         {"role": "user", "content": question},
     ]
 
@@ -502,8 +592,8 @@ RULES:
             resp = client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=messages,
-                temperature=0.6,
-                max_tokens=400,
+                temperature=0.65 if short else 0.6,
+                max_tokens=260 if short else 420,
             )
             answer = resp.choices[0].message.content.strip()
             print("DEBUG call_openai: got answer length =", len(answer))
@@ -517,8 +607,8 @@ RULES:
             resp = openai.ChatCompletion.create(
                 model=OPENAI_MODEL,
                 messages=messages,
-                temperature=0.6,
-                max_tokens=400,
+                temperature=0.65 if short else 0.6,
+                max_tokens=260 if short else 420,
             )
             answer = resp["choices"][0]["message"]["content"].strip()
             print("DEBUG call_openai: got answer length =", len(answer))
@@ -852,7 +942,7 @@ def process_buybot_for(token_key: str, chat_id: int):
         return
 
     idx = hashes.index(last_hash)
-    new_trades = trades[idx + 1 :]
+    new_trades = trades[idx + 1 : ]
     if not new_trades:
         return
 
@@ -903,7 +993,7 @@ IDLE_MESSAGES_TBP = [
     "It’s getting quiet… should I start buying TBP myself? 👀",
     "Reminder: you can sleep and work later – first we ride together to the moon with TBP! 🌕🔥",
     "Silence detected. Maybe it’s time for a fresh TBP meme? 😎",
-    "🪙 TBP-AI NFTs are live (Gold $60 / Silver $30). Mint here: https://quantumpepe.github.io/TBP-NFTs/ 🐸",
+    "🪙 TBP-AI NFTs are live (Gold $60 / Silver $30). Mint here: https://quantumpepe.github.io/NFTs-WalletConnectV2/ 🐸",
 ]
 
 IDLE_MESSAGES_CBOOST = [
@@ -1592,23 +1682,47 @@ def telegram_webhook():
         if not should_reply(chat_id):
             return jsonify({"ok": True})
 
+    # =========================
+    # HUMAN-LIKE AI REPLY (Context + Typing + Delay)
+    # =========================
+
+    remember_chat(chat_id, "user", text)
+
+    # Mini user memory (super leicht)
+    if "nft" in low:
+        remember_user(user_id, "Interested in NFTs")
+    if "price" in low or "preis" in low or "chart" in low:
+        remember_user(user_id, "Often asks about price/chart")
+    if is_de(text):
+        remember_user(user_id, "Prefers German")
+
+    chat_ctx = build_context(chat_id, user_id)
+    short = not wants_detail(text)
+
+    tg_typing(chat_id)
+
     mode = "cboost" if is_cboost_chat else "tbp"
-    raw = call_openai(text, MEM["ctx"], mode=mode)
+    raw = call_openai(text, MEM["ctx"], mode=mode, chat_ctx=chat_ctx, short=short)
     if not raw:
         raw = say(lang, "Netzwerkfehler. Versuch’s nochmal 🐸", "Network glitch. Try again 🐸")
+
+    reply = spice_reply(clean_answer(raw))
+    human_delay(reply)
 
     wants_links = re.search(r"\b(link|links|buy|kaufen|chart|scan|nft|nfts)\b", low)
     if wants_links and mode == "tbp":
         tg_buttons(
             chat_id,
-            clean_answer(raw),
+            reply,
             [("Sushi", LINKS["buy"]), ("Chart", LINKS["dexscreener"]), ("Scan", LINKS["contract_scan"]), ("NFTs", LINKS["nfts"])]
         )
     else:
-        tg_send(chat_id, clean_answer(raw), reply_to=msg_id, preview=False)
+        tg_send(chat_id, reply, reply_to=msg_id, preview=False)
+
+    remember_chat(chat_id, "bot", reply)
 
     MEM["ctx"].append(f"You: {text}")
-    MEM["ctx"].append(f"BOT: {raw}")
+    MEM["ctx"].append(f"BOT: {reply}")
     MEM["ctx"] = MEM["ctx"][-10:]
 
     return jsonify({"ok": True})
