@@ -1647,7 +1647,38 @@ def telegram_webhook():
                 f"⚠️ External promo for other projects is not allowed here. (Strike {strike}/3)"
             ))
             return jsonify({"ok": True})
-
+    # =========================
+    # NFT EXPLANATION (human)
+    # =========================
+    if "nft" in low and any(k in low for k in ["funktion", "function", "utility", "use", "wofür", "was ist", "what is"]):
+        tg_typing(chat_id)
+        human_delay_for("nft")
+        tg_send(
+            chat_id,
+            say(lang,
+                "🧠 <b>Was ist die Funktion eines NFTs?</b>\n\n"
+                "Ein NFT (Non-Fungible Token) ist ein <b>digitaler Besitznachweis</b> auf der Blockchain.\n"
+                "Im Gegensatz zu Coins ist jeder NFT <b>einzigartig</b>.\n\n"
+                "🛠 <b>TBP-AI NFTs haben folgende Funktionen:</b>\n"
+                "• Community-Support & Sammelobjekt\n"
+                "• Nachweis (Proof) für spätere Vorteile\n"
+                "• Transparenter Mint on-chain\n"
+                "• Basis für spätere Utilities (Rollen, Zugang, Airdrops)\n\n"
+                f"🔗 Mint: {LINKS['nfts']}",
+                "🧠 <b>What is the function of an NFT?</b>\n\n"
+                "An NFT (Non-Fungible Token) is a <b>unique digital ownership proof</b> on the blockchain.\n\n"
+                "🛠 <b>TBP-AI NFTs are used for:</b>\n"
+                "• Community support & collectible\n"
+                "• Proof for future benefits\n"
+                "• Fully transparent on-chain mint\n"
+                "• Foundation for future utilities\n\n"
+                f"🔗 Mint: {LINKS['nfts']}"
+            ),
+            reply_to=msg_id,
+            preview=False
+        )
+        return jsonify({"ok": True})
+  
     # =========================
     # FAST FAQ SHORTCUTS
     # =========================
