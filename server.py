@@ -594,7 +594,9 @@ def faq_reply(text: str, lang: str, is_cboost_chat: bool) -> str:
 
     if not is_cboost_chat:
         # TBP FAQ
-        if WORD_NFT.search(t) or "mint" in t:
+        # FIX: NFT-FAQ nur bei Mint / Preis / Kaufen
+    
+    if WORD_NFT.search(t) and ("mint" in t or "buy" in t or "kaufen" in t or "preis" in t or "price" in t):
             return (
                 "🪙 <b>TBP-AI NFTs</b>\n"
                 "🥇 Gold: <b>$60</b>\n"
@@ -1707,7 +1709,7 @@ def telegram_webhook():
     out = clean_answer(raw)
 
     # If user explicitly asks for links/buttons
-    wants_links = bool(re.search(r"\b(link|links|buy|kaufen|chart|scan|nft|nfts|website)\b", low))
+    wants_links = bool(re.search(r"\b(link|links|buy|kaufen|chart|scan|website)\b", low))
     if wants_links and mode == "tbp":
         human_delay_for(out)
         tg_buttons(
