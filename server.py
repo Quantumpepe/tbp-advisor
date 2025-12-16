@@ -596,7 +596,7 @@ def faq_reply(text: str, lang: str, is_cboost_chat: bool) -> str:
         # TBP FAQ
         # FIX: NFT-FAQ nur bei Mint / Preis / Kaufen
     
-    if WORD_NFT.search(t) and ("mint" in t or "buy" in t or "kaufen" in t or "preis" in t or "price" in t):
+       if WORD_NFT.search(t) and ("mint" in t or "buy" in t or "kaufen" in t or "preis" in t or "price" in t):
             return (
                 "🪙 <b>TBP-AI NFTs</b>\n"
                 "🥇 Gold: <b>$60</b>\n"
