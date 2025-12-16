@@ -63,130 +63,7 @@ CBOOST_NETWORK       = os.environ.get("CBOOST_NETWORK", "polygon_pos").strip() o
 CBOOST_POOL_ADDRESS  = os.environ.get("CBOOST_POOL_ADDRESS", CBOOST_PAIR).strip()
 
 # =========================
-# SHARED MEMORY + STATE (TG + WEB)
-# =========================
-MEMORY_FILE = "tbp_shared_memory.json"
-STATE_LOCK = threading.Lock()
-
-SHARED = {
-    "state": {
-        "community_mode": "neutral",   # neutral | nervous | hype | calm
-        "answer_mode": "balanced",     # short | balanced | deep
-        "last_update": None
-    },
-    "stats": {
-        "faq_counts": {},              # question_key -> count
-        "recent_topics": []            # last topics
-    },
-    "recent": {
-        "events": []                   # list of dicts
-    }
-}
-
-def _now_iso():
-    return datetime.utcnow().isoformat() + "Z"
-
-def load_shared():
-    global SHARED
-    try:
-        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            # shallow update
-            for k, v in data.items():
-                if isinstance(v, dict) and isinstance(SHARED.get(k), dict):
-                    SHARED[k].update(v)
-                else:
-                    SHARED[k] = v
-    except FileNotFoundError:
-        pass
-    except Exception:
-        pass
-
-def save_shared():
-    try:
-        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(SHARED, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-def normalize_question_key(text: str) -> str:
-    t = (text or "").strip().lower()
-    t = re.sub(r"https?://\S+", "", t)
-    t = re.sub(r"[^a-z0-9äöüß\s]", " ", t)
-    t = re.sub(r"\s+", " ", t).strip()
-    return t[:80] if t else "empty"
-
-def detect_shared_topic(text: str) -> str:
-    t = (text or "").lower()
-    if "nft" in t or "mint" in t or "gold" in t or "silver" in t:
-        return "nft"
-    if "price" in t or "preis" in t or "kurs" in t or "chart" in t or "mc" in t or "market cap" in t:
-        return "market"
-    if "liq" in t or "liquidity" in t or "lp" in t:
-        return "liquidity"
-    if "stake" in t or "staking" in t:
-        return "staking"
-    if "buy" in t or "kaufen" in t or "swap" in t:
-        return "buy"
-    if "scam" in t or "rug" in t or "honeypot" in t or "betrug" in t:
-        return "risk"
-    return "general"
-
-def update_shared(channel: str, user_id: str, text: str, sentiment_hint: str = None):
-    key = normalize_question_key(text)
-    topic = detect_shared_topic(text)
-    ts = _now_iso()
-
-    with STATE_LOCK:
-        SHARED.setdefault("stats", {}).setdefault("faq_counts", {})
-        SHARED["stats"]["faq_counts"][key] = SHARED["stats"]["faq_counts"].get(key, 0) + 1
-
-        SHARED.setdefault("stats", {}).setdefault("recent_topics", [])
-        SHARED["stats"]["recent_topics"].append(topic)
-        SHARED["stats"]["recent_topics"] = SHARED["stats"]["recent_topics"][-30:]
-
-        SHARED.setdefault("recent", {}).setdefault("events", [])
-        SHARED["recent"]["events"].append({
-            "ts": ts, "ch": channel, "uid": str(user_id)[:64],
-            "topic": topic, "key": key
-        })
-        SHARED["recent"]["events"] = SHARED["recent"]["events"][-60:]
-
-        # Optional: simple sentiment auto (very safe)
-        if sentiment_hint in ("nervous", "hype", "calm", "neutral"):
-            SHARED.setdefault("state", {})["community_mode"] = sentiment_hint
-
-        SHARED.setdefault("state", {})["last_update"] = ts
-
-        save_shared()
-
-def get_shared_snapshot():
-    with STATE_LOCK:
-        faq = SHARED.get("stats", {}).get("faq_counts", {}) or {}
-        top_faq = sorted(faq.items(), key=lambda x: x[1], reverse=True)[:5]
-        return {
-            "state": SHARED.get("state", {}),
-            "top_faq": top_faq,
-            "recent_topics": (SHARED.get("stats", {}).get("recent_topics", []) or [])[-10:],
-            "recent_events": (SHARED.get("recent", {}).get("events", []) or [])[-10:]
-        }
-
-# load on startup
-load_shared()
-
-# =========================
-# UNIVERSAL INCOMING HOOK (TG + WEB)
-# =========================
-def on_incoming_message(channel: str, user_id: str, text: str):
-    try:
-        if text:
-            update_shared(channel=channel, user_id=str(user_id), text=text)
-    except Exception:
-        pass
-
-# =========================
-# MEMORY / STATE (legacy in-process)
+# MEMORY / STATE
 # =========================
 
 MEM = {
@@ -317,6 +194,7 @@ REPLY_KEYWORDS_TBP = [
     "tbp", "turbopepe", "price", "preis", "chart", "mc", "market cap", "volume", "liq", "liquidity",
     "nft", "nfts", "mint", "sushi", "swap", "buy", "kaufen", "scan", "contract", "polygonscan",
     "lp", "burn", "burned", "renounce", "renounced", "owner", "tax", "0%","0 tax",
+    "future", "zukunft", "plan", "roadmap"
 ]
 REPLY_KEYWORDS_CBOOST = [
     "c-boost", "cboost", "boost", "price", "preis", "chart", "mc", "market cap", "volume", "liq", "liquidity",
@@ -655,6 +533,8 @@ def detect_topic_label(text: str) -> str:
         return "listing"
     if "how" in t or "wie" in t or "help" in t or "hilfe" in t:
         return "help"
+    if "plan" in t or "roadmap" in t or "future" in t or "zukunft" in t:
+        return "plan"
     return "chat"
 
 def window_lines(chat_id: int, sec: int = TOPIC_WINDOW_SEC):
@@ -717,16 +597,44 @@ def faq_reply(text: str, lang: str, is_cboost_chat: bool) -> str:
         # TBP FAQ
         # =========================
 
-        # 1) NFT - Erklärung (nicht nur Link!)
-        if ("nft" in t) and any(k in t for k in ["was ist", "what is", "funktion", "function", "utility", "nutzen", "wofür"]):
+        # ✅ TBP PLAN / ROADMAP shortcut (Fix für "tell me the plan", "future", etc.)
+        if any(k in t for k in ["plan", "roadmap", "zukunft", "future"]) and any(k in t for k in ["tbp", "turbopepe", "nft", "ai", "bot", "project"]):
+            return say(lang,
+                "🧭 <b>TBP Plan (kurz)</b>\n"
+                "1) Community + Memes + stabiler BuyBot\n"
+                "2) NFTs als Support + später Perks (Rollen/Access/Airdrops)\n"
+                "3) AI weiter ausbauen (bessere Antworten + Tools)\n"
+                "4) Mehr Sichtbarkeit (Trackers/Listing wenn organisch passt)\n\n"
+                "Willst du eher <b>NFT-Future</b> oder <b>AI-Future</b> genauer? 🙂",
+                "🧭 <b>TBP Plan (short)</b>\n"
+                "1) Community + memes + stable BuyBot\n"
+                "2) NFTs as support + later perks (roles/access/airdrops)\n"
+                "3) Keep upgrading the AI (better replies + tools)\n"
+                "4) More visibility (trackers/listings when organic)\n\n"
+                "Do you want <b>NFT future</b> or <b>AI future</b> in more detail? 🙂"
+            )
+
+        # ✅ NFT - Erklärung (Fix: Future/Plan/Roadmap triggert Erklärung, nicht nur Link)
+        if ("nft" in t) and any(k in t for k in ["was ist","what is","funktion","function","utility","nutzen","wofür","future","zukunft","plan","roadmap","wieso","warum"]):
             return say(lang,
                 "🧠 <b>Was ist ein NFT?</b>\n"
-                "Ein NFT (Non-Fungible Token) ist ein <b>digitaler Besitznachweis</b> auf der Blockchain – einzigartig, nicht austauschbar wie normale Coins.\n\n"
+                "Ein NFT ist ein <b>digitaler Besitznachweis</b> auf der Blockchain – einzigartig, nicht wie normale Coins austauschbar.\n\n"
                 "🛠 <b>Wofür sind TBP-AI NFTs?</b>\n"
                 "• Community-Support & Sammelobjekt\n"
-                "• Zugang/Proof (später erweiterbar: Perks, Rollen, Whitelists)\n"
-                "• Transparenter Mint on-chain (jeder kann prüfen)\n\n"
-                f"✅ Mint-Seite: {LINKS['nfts']}"
+                "• Proof für spätere Vorteile (Rollen/Access/Airdrops)\n"
+                "• Transparenter Mint on-chain (jeder kann’s prüfen)\n\n"
+                "🚀 <b>Future / Plan:</b>\n"
+                "Später kann man damit z.B. spezielle Rollen, Zugang zu Tools/Alpha-Features oder Community-Perks verbinden.\n\n"
+                f"✅ Mint-Seite: {LINKS['nfts']}",
+                "🧠 <b>What is an NFT?</b>\n"
+                "An NFT is a <b>unique digital ownership proof</b> on the blockchain.\n\n"
+                "🛠 <b>What are TBP-AI NFTs for?</b>\n"
+                "• Community support & collectible\n"
+                "• Proof for future perks (roles/access/airdrops)\n"
+                "• Transparent on-chain mint\n\n"
+                "🚀 <b>Future / plan:</b>\n"
+                "Later it can be linked to roles, tool access, alpha features, and community perks.\n\n"
+                f"✅ Mint page: {LINKS['nfts']}"
             )
 
         # 2) NFT Mint / Preise / “NFTs” (Shortcut)
@@ -846,20 +754,6 @@ VISION:
 - Long-term goal: dedicated AI infrastructure around TBP (servers, private models, tools).
 - Be clear what exists today vs future plans. No guarantees.
 """
-
-    # ✅ Inject shared snapshot so BOTH bots behave consistently
-    try:
-        shared = get_shared_snapshot()
-        shared_ctx = (
-            "\n\n[SHARED_STATE]\n"
-            f"community_mode: {shared.get('state', {}).get('community_mode')}\n"
-            f"answer_mode: {shared.get('state', {}).get('answer_mode')}\n"
-            f"top_faq: {shared.get('top_faq')}\n"
-            f"recent_topics: {shared.get('recent_topics')}\n"
-        )
-        system_msg += shared_ctx
-    except Exception:
-        pass
 
     messages = [
         {"role": "system", "content": system_msg},
@@ -1325,11 +1219,6 @@ def root():
 def health():
     return jsonify({"ok": True})
 
-@app.get("/api/shared")
-def api_shared():
-    # optional endpoint (debug / frontend)
-    return jsonify(get_shared_snapshot())
-
 @app.route("/admin/set_webhook")
 def admin_set_webhook():
     key = request.args.get("key", "")
@@ -1365,10 +1254,6 @@ def ask():
     if not q:
         return jsonify({"answer": "empty question"}), 200
 
-    # ✅ Shared Memory (WEB)
-    uid = request.headers.get("X-Forwarded-For", request.remote_addr) or "web"
-    on_incoming_message(channel="web", user_id=str(uid), text=q)
-
     lang = "de" if is_de(q) else "en"
     if WORD_PRICE.search(q):
         p = get_live_price()
@@ -1399,10 +1284,6 @@ def ask_cboost():
     q = (data.get("question") or "").strip()
     if not q:
         return jsonify({"answer": "empty question"}), 200
-
-    # ✅ Shared Memory (WEB)
-    uid = request.headers.get("X-Forwarded-For", request.remote_addr) or "web"
-    on_incoming_message(channel="web", user_id=str(uid), text=q)
 
     raw = call_openai(q, MEM["ctx"], mode="cboost") or "Network glitch. Try again ⚡"
     ans = clean_answer(raw)
@@ -1494,10 +1375,6 @@ def telegram_webhook():
     msg_id  = msg.get("message_id")
     new_members = msg.get("new_chat_members") or []
 
-    # ✅ Shared Memory (TG) — wichtigste Stelle
-    if chat_id and text:
-        on_incoming_message(channel="tg", user_id=str(chat_id), text=text)
-
     reply_to = msg.get("reply_to_message") or {}
     replied_to_bot = False
     try:
@@ -1514,6 +1391,15 @@ def telegram_webhook():
         MEM["last_activity"][chat_id] = datetime.utcnow()
     except Exception:
         pass
+
+    # ✅ FIX: Nur "?" / "!!" / "..." NICHT an AI schicken
+    if text and re.fullmatch(r"[?\.\!]+", text):
+        # Option A: komplett ignorieren (weniger Spam)
+        return jsonify({"ok": True})
+        # Option B (wenn du lieber Rückfrage willst):
+        # lang = "de" if is_de(text) else "en"
+        # tg_send(chat_id, say(lang, "Meinst du NFTs, Preis oder Roadmap? 🙂", "Do you mean NFTs, price, or roadmap? 🙂"), reply_to=msg_id)
+        # return jsonify({"ok": True})
 
     is_cboost_chat = bool(CBOOST_CHAT_ID and chat_id == CBOOST_CHAT_ID)
 
@@ -1794,30 +1680,31 @@ def telegram_webhook():
             return jsonify({"ok": True})
 
     # =========================
-    # NFT EXPLANATION (human)
+    # NFT EXPLANATION (human) — FIX: Future/Plan/Roadmap inkludiert
     # =========================
-    if "nft" in low and any(k in low for k in ["funktion", "function", "utility", "use", "wofür", "was ist", "what is"]):
+    if "nft" in low and any(k in low for k in ["funktion","function","utility","use","wofür","was ist","what is","future","zukunft","plan","roadmap"]):
         tg_typing(chat_id)
-        human_delay_for("nft")
+        time.sleep(random.uniform(0.6, 1.4))
         tg_send(
             chat_id,
             say(lang,
                 "🧠 <b>Was ist die Funktion eines NFTs?</b>\n\n"
-                "Ein NFT (Non-Fungible Token) ist ein <b>digitaler Besitznachweis</b> auf der Blockchain.\n"
-                "Im Gegensatz zu Coins ist jeder NFT <b>einzigartig</b>.\n\n"
-                "🛠 <b>TBP-AI NFTs haben folgende Funktionen:</b>\n"
-                "• Community-Support & Sammelobjekt\n"
-                "• Nachweis (Proof) für spätere Vorteile\n"
-                "• Transparenter Mint on-chain\n"
-                "• Basis für spätere Utilities (Rollen, Zugang, Airdrops)\n\n"
+                "Ein NFT ist ein <b>digitaler Besitznachweis</b> – einzigartig & on-chain überprüfbar.\n\n"
+                "🛠 <b>TBP-AI NFTs:</b>\n"
+                "• Community-Support & Collectible\n"
+                "• Proof für spätere Vorteile\n"
+                "• Transparenter Mint on-chain\n\n"
+                "🚀 <b>Future:</b>\n"
+                "Später kann man damit Rollen/Access, Tools, Airdrops oder Perks verbinden.\n\n"
                 f"🔗 Mint: {LINKS['nfts']}",
                 "🧠 <b>What is the function of an NFT?</b>\n\n"
-                "An NFT (Non-Fungible Token) is a <b>unique digital ownership proof</b> on the blockchain.\n\n"
-                "🛠 <b>TBP-AI NFTs are used for:</b>\n"
+                "An NFT is <b>unique digital ownership proof</b> on-chain.\n\n"
+                "🛠 <b>TBP-AI NFTs:</b>\n"
                 "• Community support & collectible\n"
                 "• Proof for future benefits\n"
-                "• Fully transparent on-chain mint\n"
-                "• Foundation for future utilities\n\n"
+                "• Transparent on-chain mint\n\n"
+                "🚀 <b>Future:</b>\n"
+                "Later it can be linked to roles/access, tools, airdrops, and perks.\n\n"
                 f"🔗 Mint: {LINKS['nfts']}"
             ),
             reply_to=msg_id,
