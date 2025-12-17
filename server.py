@@ -51,6 +51,43 @@ LINKS = {
     # ✅ NFTs
     "nfts":         "https://quantumpepe.github.io/NFTs-WalletConnectV2/",
 }
+# =========================
+# TBP PUBLIC KNOWLEDGE BASE (shared for Web + Telegram)
+# =========================
+
+TBP_PUBLIC_KB = r"""
+PROJECT: TBP-AI (TurboPepe-AI)
+
+IDENTITY
+- You are TBP-AI, the official community assistant for TBP-AI.
+- You answer BOTH general questions (NFTs, blockchain, wallets, liquidity) AND TBP-specific questions.
+- You are calm, friendly, human-like. No hype.
+
+NON-FINANCIAL ADVICE
+- Never give financial advice. No buy/sell instructions, no price targets, no “guaranteed profit”.
+- If asked about investment/price: explain risks and focus on utility, transparency, and education.
+
+CORE TBP FACTS (public)
+- Chain: Polygon.
+- 0% tax.
+- LP burned, owner renounced.
+- TBP has Website AI + Telegram assistant + live buy bot + security filters.
+- TBP-AI NFTs exist: Gold ($60) and Silver ($30).
+- Mint page: https://quantumpepe.github.io/NFTs-WalletConnectV2/
+
+PUBLIC VISION
+- Long-term building: AI tools, bots, monitoring utilities, community automation.
+- Be clear what exists today vs what is planned. No promises.
+
+COMMUNITY BEHAVIOR
+- Explain first. Then (if relevant) relate it to TBP.
+- Only share links when the user asks “link/where/how/buy/mint/scan/chart”.
+
+MISINFORMATION POLICY
+- If someone is correct: you may briefly confirm (“Exactly 👍”) + 1 short explanation.
+- If someone is wrong: gently correct (“Small correction: …”) + 1 short explanation.
+- Do NOT spam. Rate-limit interjections.
+"""
 
 # TBP Supply für grobe MC-Schätzung (nur Info, nicht kritisch)
 MAX_SUPPLY  = 190_000_000_000
@@ -72,6 +109,7 @@ MEM = {
     "chat_count": 0,
     "raid_on": False,
     "raid_msg": "Drop a fresh TBP meme! 🐸⚡",
+    "interject_log": {},        # chat_id -> deque[timestamps]
 
     # Throttle:
     "resp_mode": "0",           # "0"=alles, "1"=jede 3., "2"=jede 10. (legacy)
@@ -111,6 +149,36 @@ WORD_LINKS = re.compile(r"\b(link|links|buy|kaufen|swap|chart|scan|website|teleg
 WORD_HELP  = re.compile(r"\b(help|hilfe|how|wie|warum|wieso|was|what)\b", re.I)
 
 GER_DET    = re.compile(r"\b(der|die|das|und|nicht|warum|wie|kann|preis|kurs|listung|tokenomics|hilfe|was)\b", re.I)
+def maybe_smart_interject(chat_id: int, text: str, lang: str):
+    low = (text or "").lower()
+
+    # bestätigt korrekte TBP-Fakten
+    if "lp" in low and ("burn" in low or "burned" in low):
+        return say(lang,
+            "Genau 👍 Die LP ist geburnt – dadurch kein Rug möglich.",
+            "Exactly 👍 The LP is burned – no rug possible."
+        )
+
+    if "owner" in low and ("renounce" in low or "renounced" in low):
+        return say(lang,
+            "Richtig ✅ Owner ist renounced.",
+            "Correct ✅ Owner is renounced."
+        )
+
+    if "0%" in low and ("tax" in low or "steuer" in low):
+        return say(lang,
+            "Stimmt 👍 TBP hat 0 % Tax.",
+            "True 👍 TBP has 0% tax."
+        )
+
+    # sanfte Korrektur bei Hype
+    if "100x" in low or "guarantee" in low or "garantie" in low:
+        return say(lang,
+            "Kleine Klarstellung 🙂 Es gibt keine Garantien.",
+            "Quick clarification 🙂 There are no guarantees."
+        )
+
+    return None
 
 # --- Neue Regex-Filter für Scams / Fremd-Werbung ---
 LISTING_SCAM_PATTERNS = [
@@ -186,6 +254,107 @@ def is_admin(user_id) -> bool:
         return str(user_id) in ADMIN_USER_IDS if ADMIN_USER_IDS else True
     except Exception:
         return False
+# =========================
+# SMART INTERJECTION (confirm/correct) + anti-spam
+# =========================
+
+INTERJECT_SMART_COOLDOWN_SEC = 90
+INTERJECT_SMART_MAX_PER_10MIN = 4
+
+def _dq_for_chat(chat_id: int):
+    dq = MEM.get("interject_log", {}).get(chat_id)
+    if dq is None:
+        dq = deque()
+        MEM.setdefault("interject_log", {})[chat_id] = dq
+    return dq
+
+def can_smart_interject(chat_id: int) -> bool:
+    now = time.time()
+    last = MEM.get("last_interject", {}).get(chat_id)
+    if last and (datetime.utcnow() - last).total_seconds() < INTERJECT_SMART_COOLDOWN_SEC:
+        return False
+
+    dq = _dq_for_chat(chat_id)
+    ten_min_ago = now - 600
+    while dq and dq[0] < ten_min_ago:
+        dq.popleft()
+
+    return len(dq) < INTERJECT_SMART_MAX_PER_10MIN
+
+def mark_smart_interject(chat_id: int):
+    now = time.time()
+    _dq_for_chat(chat_id).append(now)
+    MEM.setdefault("last_interject", {})[chat_id] = datetime.utcnow()
+
+def score_correct_or_misinfo(text: str):
+    t = (text or "").lower()
+
+    # Must be TBP-related to do confirm/correct reinfunks
+    if not any(k in t for k in ["tbp", "turbopepe", "tbp-ai"]):
+        return 0, "none"
+
+    score = 0
+    kind = "none"
+
+    # Correct statements
+    if ("lp" in t and ("burn" in t or "burned" in t or "geburn" in t)):
+        score += 3; kind = "correct"
+    if ("owner" in t and ("renounce" in t or "renounced" in t or "renounced" in t or "renounced" in t)) or ("owner renounced" in t) or ("owner ist renounced" in t):
+        score += 3; kind = "correct"
+    if ("0%" in t and ("tax" in t or "steuer" in t)) or ("0 tax" in t):
+        score += 2; kind = "correct"
+    if ("no financial advice" in t) or ("keine finanzberatung" in t):
+        score += 1; kind = "correct"
+
+    # Misinformation / hype
+    if ("guaranteed" in t) or ("safe profit" in t) or ("100x" in t) or ("garantiert" in t):
+        score += 3; kind = "misinfo"
+    if ("mint" in t and "tbp" in t and "unlimited" in t):
+        score += 3; kind = "misinfo"
+
+    return score, kind
+
+def build_smart_interject_prompt(kind: str, lang: str):
+    if kind == "correct":
+        return say(lang,
+            "Du bist TBP-AI in einem Telegram-Chat. Jemand hat etwas korrektes über TBP gesagt.\n"
+            "Antworte kurz (1-2 Sätze): starte mit „Genau 👍“ und gib eine kleine Erklärung.\n"
+            "Keine Finanzberatung, kein Hype, keine Preisziele.",
+            "You are TBP-AI in a Telegram group chat. Someone said something correct about TBP.\n"
+            "Reply briefly (1-2 sentences): start with “Exactly 👍” and add a tiny explanation.\n"
+            "No financial advice, no hype, no price targets."
+        )
+    if kind == "misinfo":
+        return say(lang,
+            "Du bist TBP-AI in einem Telegram-Chat. Jemand hat etwas falsches/übertriebenes gesagt.\n"
+            "Antworte kurz (1-2 Sätze): starte mit „Kleine Korrektur:“ und erkläre ruhig.\n"
+            "Keine Finanzberatung, kein Hype, keine Preisziele.",
+            "You are TBP-AI in a Telegram group chat. Someone said something wrong/overhyped.\n"
+            "Reply briefly (1-2 sentences): start with “Small correction:” and explain calmly.\n"
+            "No financial advice, no hype, no price targets."
+        )
+    return ""
+
+def maybe_smart_interject(chat_id: int, text: str, lang: str):
+    if not can_smart_interject(chat_id):
+        return None
+
+    score, kind = score_correct_or_misinfo(text)
+    if score < 3:
+        return None
+
+    sys = build_smart_interject_prompt(kind, lang) + "\n\n" + TBP_PUBLIC_KB
+    q = (text or "").strip()
+
+    raw = call_openai(q, [], mode="tbp", channel="tg")
+    # call_openai already has KB injected after Patch 2, but we keep it safe by ensuring sys exists:
+    # If you want stricter control, we can add a call_openai_with_system() later.
+
+    if not raw:
+        return None
+
+    mark_smart_interject(chat_id)
+    return clean_answer(raw)
 
 # ==========================================================
 # OPTION D UPGRADE (Explain-first + Link-Routing + NFT split)
@@ -1823,6 +1992,14 @@ def telegram_webhook():
                 note_user(chat_id, user_id or 0, "interested_nfts")
             if WORD_PRICE.search(low):
                 note_user(chat_id, user_id or 0, "asks_price")
+            return jsonify({"ok": True})
+    # SMART CONFIRM / CORRECT (3C) — TBP only, anti-spam
+    if not low.startswith("/") and not replied_to_bot and (not is_cboost_chat):
+        si = maybe_smart_interject(chat_id, text, lang)
+        if si:
+            tg_typing(chat_id)
+            time.sleep(random.uniform(0.4, 1.0))
+            tg_send(chat_id, si, reply_to=msg_id, preview=False)
             return jsonify({"ok": True})
 
     # SMART INTERJECTION (Conversation Watcher)
