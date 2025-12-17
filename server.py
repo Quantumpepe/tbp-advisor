@@ -172,7 +172,7 @@ def maybe_smart_interject(chat_id: int, text: str, lang: str):
         )
 
     # sanfte Korrektur bei Hype
-    if "100x" in low or "guarantee" in low or "garantie" in low:
+    if any(k in low for k in ["100x", "guarantee", "garantie", "safe profit"]):
         return say(lang,
             "Kleine Klarstellung 🙂 Es gibt keine Garantien.",
             "Quick clarification 🙂 There are no guarantees."
