@@ -1265,7 +1265,7 @@ IDLE_MESSAGES_TBP = [
 ]
 
 IDLE_MESSAGES_CBOOST = [
-    "C-Boost army, wo seid ihr? ⚡😂",
+    "C-Boost army, where are you? ⚡😂",
     "Too quiet… boost the chat 📈🚀",
     "Drop a meme or ask me something 😏⚡",
 ]
