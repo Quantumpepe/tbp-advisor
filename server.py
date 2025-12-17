@@ -1439,7 +1439,7 @@ def start_buybot_background():
 # =========================
 
 IDLE_MESSAGES_TBP = [
-    "Yo TBP crew… kurz ruhig hier 👀🐸",
+    "Yo TBP crew… Quiet here for a moment 👀🐸",
     "Silence detected. Drop a meme or a question 😎",
     "Reminder: TBP AI + BuyBot is running – who has already checked the chart today? 📈",
     "🪙 TBP-AI NFTs are live (Gold $60 / Silver $30). Mint: https://quantumpepe.github.io/NFTs-WalletConnectV2/ 🐸",
