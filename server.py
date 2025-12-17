@@ -254,12 +254,16 @@ def build_nft_tbp_links(lang: str) -> str:
 def build_nft_cboost_explain(lang: str) -> str:
     return say(lang,
         "🧠 NFTs sind einzigartige digitale Besitznachweise auf der Blockchain (Collectible/Membership/Access). "
-        "Wenn du willst, sag kurz: meinst du NFTs allgemein oder ein C-Boost Feature?",
+        "Wenn du willst, sag mir kurz: meinst du NFTs allgemein oder ein C-Boost Feature?",
         "🧠 NFTs are unique digital ownership proofs on-chain (collectible/membership/access). "
         "If you want, tell me: do you mean NFTs in general or a C-Boost feature?"
     )
 
 def knowledge_router(text: str, lang: str, is_cboost_chat: bool, allow_links: bool = True) -> str:
+    """
+    Returns a fully-formed answer if we can handle it via stable knowledge (Explain-first & link routing).
+    Otherwise returns "" to continue normal flow.
+    """
     t = (text or "").strip().lower()
     if not t:
         return ""
@@ -289,7 +293,7 @@ def knowledge_router(text: str, lang: str, is_cboost_chat: bool, allow_links: bo
 
         if not wants_links:
             return say(lang,
-                "🪙 TBP-AI NFTs: 🥇 Gold $60 / 🥈 Silver $30. Willst du kurz die Utility oder den Mint-Link?",
+                "🪙 TBP-AI NFTs: 🥇 Gold $60 / 🥈 Silver $30. Willst du kurz die Utility hören oder den Mint-Link?",
                 "🪙 TBP-AI NFTs: 🥇 Gold $60 / 🥈 Silver $30. Do you want the utility or the mint link?"
             )
 
@@ -326,12 +330,6 @@ def _looks_like_question(text: str) -> bool:
     return bool(re.search(r"\b(wie|warum|wieso|was|welche|help|how|why|what|when|where)\b", t.lower()))
 
 def should_reply(chat_id: int, text: str, is_cboost_chat: bool, replied_to_bot: bool = False) -> bool:
-    """
-    Human-like reply policy:
-    - Always if user replies to bot
-    - Always if question OR contains project keywords
-    - Otherwise: do NOT answer (reduces bot spam)
-    """
     if replied_to_bot:
         return True
     if _looks_like_question(text):
@@ -528,7 +526,6 @@ def get_live_price():
                 return p
     except Exception:
         pass
-
     try:
         r = requests.get(
             f"https://api.dexscreener.com/latest/dex/pairs/polygon/{TBP_PAIR}",
@@ -649,7 +646,8 @@ def detect_topic_label(text: str) -> str:
 def window_lines(chat_id: int, sec: int = TOPIC_WINDOW_SEC):
     ensure_chat_mem(chat_id)
     now = datetime.utcnow()
-    return [x for x in list(MEM["chat_mem"][chat_id]) if (now - x["t"]).total_seconds() <= sec]
+    out = [x for x in list(MEM["chat_mem"][chat_id]) if (now - x["t"]).total_seconds() <= sec]
+    return out
 
 def should_interject(chat_id: int, is_cboost_chat: bool) -> bool:
     now = datetime.utcnow()
@@ -700,6 +698,7 @@ def get_user_notes(chat_id: int, user_id: int):
 def faq_reply(text: str, lang: str, is_cboost_chat: bool) -> str:
     t = (text or "").lower().strip()
 
+    # Knowledge router first
     kr = knowledge_router(text, lang, is_cboost_chat, allow_links=True)
     if kr:
         return kr
@@ -760,14 +759,24 @@ def faq_reply(text: str, lang: str, is_cboost_chat: bool) -> str:
         return ""
 
 # =========================
-# OPENAI
+# OPENAI (FIXED: web vs telegram + context is used)
 # =========================
 
+def _build_messages_from_ctx(system_msg: str, question: str, ctx_list):
+    messages = [{"role": "system", "content": system_msg}]
+    try:
+        for line in (ctx_list or [])[-12:]:
+            if isinstance(line, str) and line.startswith("You: "):
+                messages.append({"role": "user", "content": line[5:]})
+            elif isinstance(line, str) and (line.startswith("TBP: ") or line.startswith("C-Boost: ")):
+                parts = line.split(": ", 1)
+                messages.append({"role": "assistant", "content": parts[1] if len(parts) > 1 else line})
+    except Exception:
+        pass
+    messages.append({"role": "user", "content": question})
+    return messages
+
 def call_openai(question: str, context, mode: str = "tbp", channel: str = "tg"):
-    """
-    mode: 'tbp' or 'cboost'
-    channel: 'tg' (Telegram) or 'web' (Website)
-    """
     print("DEBUG call_openai: mode =", mode, "channel =", channel)
     print("DEBUG call_openai: OPENAI_API_KEY set =", bool(OPENAI_API_KEY))
     print("DEBUG call_openai: OPENAI_MODEL =", OPENAI_MODEL)
@@ -776,92 +785,87 @@ def call_openai(question: str, context, mode: str = "tbp", channel: str = "tg"):
         print("DEBUG call_openai: NO OPENAI_API_KEY, aborting.")
         return None
 
-    # --- Telegram prompts: human-like + can answer general questions too ---
-    TG_COMMON_RULES = """ALWAYS answer in the user's language (German or English). Detect language automatically.
-
-STYLE (Telegram):
-- Sound like a real community member, not corporate.
-- Default: short (1-5 sentences), BUT:
-  - If the user asks a general question (e.g. "what is an NFT", "how does staking work"), answer normally and you may go longer.
-  - If the user asks for steps/tutorial, you may give a longer structured answer.
-- Light humor OK. No spam.
-- No price predictions. No financial advice.
-- Don't invent facts. If you don't know a project-specific detail, say so.
-- Links ONLY if user asks for link/where/buy/mint/scan/chart.
-"""
-
-    # --- Web prompts: ChatGPT-like, helpful, allows full explanations ---
-    WEB_COMMON_RULES = """ALWAYS answer in the user's language (German or English). Detect language automatically.
-
-STYLE (Website):
-- You can answer general questions like ChatGPT (explain concepts clearly).
-- If the question is unrelated to the project, answer generally.
-- If it's TBP/C-Boost related, answer accurately and you may include project context.
-- No price predictions. No financial advice.
-- Don't invent facts. If you don't know a project-specific detail, say so.
-- Links only if user asks for them.
-"""
-
     if mode == "cboost":
         if channel == "web":
-            system_msg = f"""You are C-BoostAI, the official assistant for the C-Boost micro-supply token on Polygon.
-{WEB_COMMON_RULES}
+            system_msg = """You are C-BoostAI on the official website.
+Behave like a helpful ChatGPT-style assistant.
 
-PROJECT INFO (C-Boost):
-- C-Boost is a micro supply meme token on Polygon.
+RULES:
+- Answer general questions normally (even if not C-Boost related).
+- If relevant, relate the answer back to C-Boost briefly.
+- You may be detailed when needed.
+- No hype promises, no price predictions, no financial advice.
+- Only share links if the user explicitly asks for links/where/how."""
+        else:
+            system_msg = """You are C-BoostAI, the official assistant of the C-Boost micro supply token on Polygon.
+ALWAYS answer in the user's language (German or English). Detect language automatically.
+
+STYLE:
+- Sound like a real Telegram community member: short, friendly, not corporate.
+- Default length: 1-4 sentences. Only go longer if user explicitly asks for details/steps.
+- Light humor is OK. No spam. No hype promises. No price predictions. No financial advice.
+
+PROJECT INFO:
+- C-Boost is a next-generation MICRO SUPPLY token on Polygon.
 - Total supply: 5,000,000 tokens.
 - Transparent supply, no complex taxes.
-- Focus on community raids and future AI tools.
-- BuyBot exists posting on-chain buys with USD value and tx link.
+- Focus on raids, strong community, and future AI tools.
+- Long-term vision: meme creation, AI utilities, and community quests.
+
+BUYBOT INFO:
+- C-Boost has an official BuyBot system posting on-chain buys with USD value, token amount, wallet short, NEW holder tag, tx link.
 
 RULES:
 - Be factual.
-- If users ask about TBP specifically, you can still answer general concepts, but note you're the C-Boost assistant.
-"""
-        else:
-            system_msg = f"""You are C-BoostAI, the official assistant for the C-Boost micro-supply token on Polygon.
-{TG_COMMON_RULES}
-
-PROJECT INFO (C-Boost):
-- Micro supply token on Polygon. Total supply: 5,000,000 tokens.
-- Transparent supply, no complex taxes.
-- Community raids and future AI tools.
-- BuyBot posts on-chain buys with USD value and tx link.
+- If users ask about TBP, say you are only responsible for C-Boost.
 """
     else:
         if channel == "web":
-            system_msg = f"""You are TBP-AI, the official assistant of TurboPepe-AI (TBP) on Polygon.
-{WEB_COMMON_RULES}
+            system_msg = """You are TBP-AI on the official TurboPepe-AI (TBP) website.
+Behave like a helpful ChatGPT-style assistant.
 
-CURRENT PROJECT (TBP):
-- Community-driven meme + AI token on Polygon.
-- LP is burned, owner is renounced, 0% tax (no buy/sell tax).
+CORE:
+- Answer general questions normally (even if not TBP-related).
+- If relevant, relate the answer back to TBP briefly and clearly.
+- You may be detailed when needed (step-by-step if user asks).
+- Be honest about what exists today vs future plans.
+- No hype promises, no price predictions, no financial advice.
+- Only share links if the user explicitly asks for links/where/how/buy/mint/scan/chart.
+
+TBP FACTS (use when relevant):
+- Chain: Polygon.
+- 0% tax.
+- LP burned, owner renounced.
 - Website AI + Telegram assistant + live buy bot + security filters.
-- Official TBP-AI NFTs: Gold ($60) and Silver ($30).
-- Official mint page: {LINKS['nfts']}
-
-VISION:
-- Be clear what exists today vs future plans. No guarantees.
-"""
+- TBP-AI NFTs exist: Gold ($60) and Silver ($30)."""
         else:
-            system_msg = f"""You are TBP-AI, the official assistant of TurboPepe-AI (TBP) on Polygon.
-{TG_COMMON_RULES}
+            system_msg = """You are TBP-AI, the official assistant of TurboPepe-AI (TBP) on Polygon.
+ALWAYS answer in the user's language (German or English). Detect language automatically.
 
-CURRENT PROJECT (TBP):
-- Community-driven meme + AI token on Polygon.
-- LP is burned, owner is renounced, 0% tax.
-- Website AI + Telegram assistant + live buy bot + security filters.
+STYLE:
+- Sound like a real Telegram community member: short, friendly, not corporate.
+- Default length: 1-4 sentences. Only go longer if user explicitly asks for details/steps.
+- Light humor is OK. No spam. No hype promises. No price predictions. No financial advice.
+
+CURRENT PROJECT:
+- TBP is a community-driven meme + AI token on Polygon.
+- LP is burned, owner is renounced, no hidden contract tricks.
+- 0% tax, fully transparent.
+- TBP has: website AI, Telegram assistant, live buy bot, and security filters.
+
+BUYBOT:
+- Posts every on-chain buy with USD value, POL amount, token amount, NEW holder detection, and tx link.
+
+NFT:
 - Official TBP-AI NFTs: Gold ($60) and Silver ($30).
-- Mint page is available if user asks: {LINKS['nfts']}
+- Official mint page: https://quantumpepe.github.io/NFTs-WalletConnectV2/
 
 VISION:
+- Long-term goal: dedicated AI infrastructure around TBP (servers, private models, tools).
 - Be clear what exists today vs future plans. No guarantees.
 """
 
-    messages = [
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": question},
-    ]
+    messages = _build_messages_from_ctx(system_msg, question, context)
 
     try:
         try:
@@ -870,8 +874,8 @@ VISION:
             resp = client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=messages,
-                temperature=0.7 if channel == "web" else 0.65,
-                max_tokens=900 if channel == "web" else 520,
+                temperature=0.70 if channel == "web" else 0.65,
+                max_tokens=700 if channel == "web" else 420,
             )
             return resp.choices[0].message.content.strip()
         except ImportError:
@@ -880,8 +884,8 @@ VISION:
             resp = openai.ChatCompletion.create(
                 model=OPENAI_MODEL,
                 messages=messages,
-                temperature=0.7 if channel == "web" else 0.65,
-                max_tokens=900 if channel == "web" else 520,
+                temperature=0.70 if channel == "web" else 0.65,
+                max_tokens=700 if channel == "web" else 420,
             )
             return resp["choices"][0]["message"]["content"].strip()
     except Exception as e:
@@ -901,12 +905,12 @@ def clean_answer(s: str) -> str:
 
 def human_delay_for(text: str):
     ln = len(text or "")
-    if ln < 90:
-        time.sleep(random.uniform(0.4, 1.1))
-    elif ln < 260:
-        time.sleep(random.uniform(0.9, 1.8))
+    if ln < 80:
+        time.sleep(random.uniform(0.4, 1.0))
+    elif ln < 220:
+        time.sleep(random.uniform(0.9, 1.6))
     else:
-        time.sleep(random.uniform(1.4, 2.9))
+        time.sleep(random.uniform(1.4, 2.6))
 
 # =========================
 # AUTO-POST (nur TBP)
@@ -990,6 +994,7 @@ TOKEN_BUYBOT = {
 
 def fetch_pool_trades(network: str, pool_address: str, token_contract: str = "", limit: int = 25):
     url = f"https://api.geckoterminal.com/api/v2/networks/{network}/pools/{pool_address}/trades"
+
     try:
         r = requests.get(url, timeout=8)
         r.raise_for_status()
@@ -1348,7 +1353,7 @@ def admin_set_webhook():
 
     return jsonify({"ok": True, "responses": results})
 
-# Web-AI für TBP-Webseite
+# Web-AI für TBP-Webseite (Option A: ChatGPT style)
 @app.route("/ask", methods=["POST"])
 def ask():
     data = request.json or {}
@@ -1358,10 +1363,8 @@ def ask():
 
     lang = "de" if is_de(q) else "en"
 
-    kr = knowledge_router(q, lang, is_cboost_chat=False, allow_links=True)
-    if kr:
-        ans = kr
-    elif WORD_PRICE.search(q):
+    # Price shortcut stays fast
+    if WORD_PRICE.search(q):
         p = get_live_price()
         stats = get_market_stats() or {}
         lines = []
@@ -1375,15 +1378,26 @@ def ask():
             lines.append(f"🔄 Vol 24h: {fmt_usd(stats['volume_24h'])}")
         ans = "\n".join(lines) if lines else say(lang, "Preis derzeit nicht verfügbar.", "Price currently unavailable.")
     else:
-        raw = call_openai(q, MEM["ctx"], mode="tbp", channel="web") or say(lang, "Netzwerkfehler. Versuch’s nochmal 🐸", "Network glitch. Try again 🐸")
+        # IMPORTANT FIX: Knowledge router is ONLY a helper hint for web, not a hard override
+        kr = knowledge_router(q, lang, is_cboost_chat=False, allow_links=True)
+        hint = ""
+        if kr:
+            hint = (
+                "\n\nUse the following quick project facts if helpful, but do NOT copy-paste as a template. "
+                "Answer naturally and adapt to the question:\n"
+                f"{kr}\n"
+            )
+
+        raw = call_openai(q + hint, MEM["ctx"], mode="tbp", channel="web") \
+              or say(lang, "Netzwerkfehler. Versuch’s nochmal 🐸", "Network glitch. Try again 🐸")
         ans = clean_answer(raw)
 
     MEM["ctx"].append(f"You: {q}")
     MEM["ctx"].append(f"TBP: {ans}")
-    MEM["ctx"] = MEM["ctx"][-12:]
+    MEM["ctx"] = MEM["ctx"][-14:]
     return jsonify({"answer": ans})
 
-# Web-AI für C-Boost Website
+# Web-AI für C-Boost Website (Option A)
 @app.route("/ask_cboost", methods=["POST"])
 def ask_cboost():
     data = request.json or {}
@@ -1394,15 +1408,19 @@ def ask_cboost():
     lang = "de" if is_de(q) else "en"
 
     kr = knowledge_router(q, lang, is_cboost_chat=True, allow_links=False)
+    hint = ""
     if kr:
-        ans = kr
-    else:
-        raw = call_openai(q, MEM["ctx"], mode="cboost", channel="web") or "Network glitch. Try again ⚡"
-        ans = clean_answer(raw)
+        hint = (
+            "\n\nUse the following quick info if helpful, but do NOT copy-paste as a template:\n"
+            f"{kr}\n"
+        )
+
+    raw = call_openai(q + hint, MEM["ctx"], mode="cboost", channel="web") or "Network glitch. Try again ⚡"
+    ans = clean_answer(raw)
 
     MEM["ctx"].append(f"You: {q}")
     MEM["ctx"].append(f"C-Boost: {ans}")
-    MEM["ctx"] = MEM["ctx"][-12:]
+    MEM["ctx"] = MEM["ctx"][-14:]
     return jsonify({"answer": ans})
 
 # C-Boost PRICE API
@@ -1443,8 +1461,8 @@ def handle_extra_commands(text, chat_id, lang, is_cboost_chat, msg_id=None):
         if is_cboost_chat:
             msg = (
                 "🤖 <b>C-BoostAI</b>\n\n"
-                "🇩🇪 Offizieller Assistant für C-Boost (Polygon). Kurz & hilfreich – aber kann auch allgemeine Fragen beantworten.\n"
-                "🇬🇧 Official assistant for C-Boost (Polygon). Short & helpful – can also answer general questions.\n"
+                "🇩🇪 Offizieller Assistant für C-Boost (Polygon). Kurz & hilfreich, keine Finanzberatung.\n"
+                "🇬🇧 Official assistant for C-Boost (Polygon). Short & helpful, no financial advice.\n"
             )
         else:
             msg = (
@@ -1577,21 +1595,22 @@ def telegram_webhook():
     lang = "de" if is_de(text) else "en"
     MEM["chat_count"] += 1
 
+    # Commands
     if low.startswith("/start"):
         if is_cboost_chat:
             tg_send(
                 chat_id,
                 say(
                     lang,
-                    "Hi, ich bin C-BoostAI ⚡ – kann kurz sein, aber auch allgemein erklären. Frag einfach 🙂",
-                    "Hi, I'm C-BoostAI ⚡ – can be short, but can also explain general questions. Just ask 🙂"
+                    "Hi, ich bin C-BoostAI ⚡ – kurz & hilfreich. Frag mich was zur Vision/Utility. Keine Finanzberatung.",
+                    "Hi, I'm C-BoostAI ⚡ – short & helpful. Ask about vision/utility. No financial advice."
                 ),
                 reply_to=msg_id
             )
         else:
             tg_buttons(
                 chat_id,
-                say(lang, f"Hi, ich bin {BOT_NAME}. Frag mich alles – auch allgemein 🙂🐸", f"Hi, I'm {BOT_NAME}. Ask me anything – also general questions 🙂🐸"),
+                say(lang, f"Hi, ich bin {BOT_NAME}. Frag was zu TBP 🐸", f"Hi, I'm {BOT_NAME}. Ask about TBP 🐸"),
                 [("Sushi", LINKS["buy"]), ("Chart", LINKS["dexscreener"]), ("Scan", LINKS["contract_scan"])]
             )
         return jsonify({"ok": True})
@@ -1643,6 +1662,7 @@ def telegram_webhook():
         )
         return jsonify({"ok": True})
 
+    # PRICE / STATS / CHART
     if low.startswith("/price") or (not low.startswith("/") and WORD_PRICE.search(low)):
         if is_cboost_chat:
             data = get_cboost_live_data()
@@ -1745,9 +1765,7 @@ def telegram_webhook():
     except Exception:
         pass
 
-    # =========================
     # SECURITY FILTERS + STRIKES
-    # =========================
     if not low.startswith("/") and not is_admin(user_id):
         if is_illegal_offer(low):
             tg_delete_message(chat_id, msg_id)
@@ -1776,7 +1794,7 @@ def telegram_webhook():
             ))
             return jsonify({"ok": True})
 
-    # Knowledge router (fast)
+    # OPTION D: Knowledge router (Telegram only) BEFORE old NFT block
     if not low.startswith("/"):
         kr = knowledge_router(text, lang, is_cboost_chat, allow_links=True)
         if kr:
@@ -1794,7 +1812,7 @@ def telegram_webhook():
                 note_user(chat_id, user_id or 0, "interested_nfts")
             return jsonify({"ok": True})
 
-    # FAQ shortcuts
+    # FAST FAQ SHORTCUTS
     if not low.startswith("/"):
         fast = faq_reply(text, lang, is_cboost_chat)
         if fast:
@@ -1807,7 +1825,7 @@ def telegram_webhook():
                 note_user(chat_id, user_id or 0, "asks_price")
             return jsonify({"ok": True})
 
-    # Smart interjection
+    # SMART INTERJECTION (Conversation Watcher)
     if not low.startswith("/") and not replied_to_bot:
         if should_interject(chat_id, is_cboost_chat):
             topic = MEM["chat_topic"].get(chat_id, "chat")
@@ -1820,7 +1838,7 @@ def telegram_webhook():
             interject_q = (
                 "You are joining an ongoing Telegram group conversation.\n"
                 "Give a short, helpful message that fits the current topic.\n"
-                "Do NOT sound like an announcement.\n"
+                "Do NOT sound like an announcement. 1-3 sentences.\n"
                 "No financial advice.\n\n"
                 f"TOPIC: {topic}\n"
                 f"{note_txt}\n\n"
@@ -1837,7 +1855,7 @@ def telegram_webhook():
             tg_send(chat_id, out, reply_to=msg_id, preview=False)
             return jsonify({"ok": True})
 
-    # Normal AI reply (selective)
+    # NORMAL AI REPLY (Selective, Human)
     if not low.startswith("/"):
         if not should_reply(chat_id, text, is_cboost_chat, replied_to_bot=replied_to_bot):
             return jsonify({"ok": True})
@@ -1850,9 +1868,8 @@ def telegram_webhook():
 
     enriched_q = (
         "Answer as a Telegram community member.\n"
-        "Default: short and friendly, but you CAN answer general questions in a normal helpful way.\n"
-        "If the user asks for details/steps, you may give a longer structured answer.\n"
-        "Explain first, then optionally relate to the project.\n"
+        "Keep it short (1-4 sentences), unless user asks for details.\n"
+        "If user asks general concept questions (e.g., NFTs), explain first, then optionally relate to the project.\n"
         "Do NOT drop links unless user asks for link/where/buy/mint/scan/chart.\n"
         "No price predictions. No financial advice.\n\n"
         f"{note_txt}\n\n"
