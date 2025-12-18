@@ -713,22 +713,43 @@ def get_live_price():
     return None
 
 def get_market_stats():
+    """Return TBP market stats using Dexscreener (schema-tolerant).
+    All numeric fields are returned as floats when possible.
+    """
     try:
         r = requests.get(
             f"https://api.dexscreener.com/latest/dex/pairs/polygon/{TBP_PAIR}",
-            timeout=6
+            timeout=8
         )
         r.raise_for_status()
-        j = r.json()
-        pair = j.get("pair") or (j.get("pairs") or [{}])[0]
+        j = r.json() or {}
+        pair = j.get("pair") or (j.get("pairs") or [{}])[0] or {}
+
+        # price change: Dexscreener commonly uses priceChange.h24
+        pc = pair.get("priceChange") or {}
+        change_24h = _safe_float(pair.get("priceChange24h"))  # legacy
+        if change_24h is None:
+            change_24h = _safe_float(pc.get("h24") or pc.get("24h"))
+
+        # volume: volume.h24 is typical
+        vol_obj = pair.get("volume") or {}
+        volume_24h = _safe_float(vol_obj.get("h24") or pair.get("volume24h") or vol_obj.get("24h"))
+
+        liq_obj = pair.get("liquidity") or {}
+        liquidity_usd = _safe_float(liq_obj.get("usd") or liq_obj.get("USD") or pair.get("liquidityUsd"))
+
+        market_cap = _safe_float(pair.get("marketCap") or pair.get("fdv") or pair.get("fdvUsd"))
+
         return {
-            "change_24h": pair.get("priceChange24h"),
-            "volume_24h": (pair.get("volume", {}) or {}).get("h24") or pair.get("volume24h"),
-            "liquidity_usd": (pair.get("liquidity") or {}).get("usd"),
-            "market_cap": pair.get("marketCap") or pair.get("fdv"),
+            "change_24h": change_24h,
+            "volume_24h": volume_24h,
+            "liquidity_usd": liquidity_usd,
+            "market_cap": market_cap,
         }
-    except Exception:
+    except Exception as e:
+        print(f"[TBP] get_market_stats error: {e}")
         return None
+
 
 def get_tbp_price_and_mc():
     try:
@@ -744,6 +765,27 @@ def get_tbp_price_and_mc():
         return price, mc
     except Exception:
         return None, None
+
+
+def get_tbp_live_data():
+    """Aggregated TBP live data (best-effort)."""
+    price, mc = get_tbp_price_and_mc()
+    stats = get_market_stats() or {}
+    # If Dexscreener MC missing, approximate from circ supply (informational only)
+    if mc is None and price is not None:
+        try:
+            mc = float(price) * float(CIRC_SUPPLY)
+        except Exception:
+            mc = None
+    return {
+        "price": price,
+        "market_cap": mc if mc is not None else stats.get("market_cap"),
+        "volume_24h": stats.get("volume_24h"),
+        "liquidity_usd": stats.get("liquidity_usd"),
+        "change_24h": stats.get("change_24h"),
+        "chart_url": LINKS.get("dexscreener"),
+    }
+
 
 # =========================
 # MARKET DATA (C-BOOST)
@@ -1858,23 +1900,48 @@ def telegram_webhook():
             tg_send_photo(chat_id, CBOOST_LOGO_URL, caption=caption, reply_to=msg_id)
             return jsonify({"ok": True})
 
-        p = get_live_price()
-        s = get_market_stats() or {}
-        lines = []
-        if p is not None:
-            lines.append(say(lang, "💰 Preis", "💰 Price") + f": {fmt_usd(p, 12)}")
-        if s.get("change_24h") not in (None, "", "null"):
-            lines.append(f"📈 24h: {s['change_24h']}%")
-        if s.get("liquidity_usd") not in (None, "", "null"):
-            lines.append("💧 " + say(lang, "Liquidität", "Liquidity") + f": {fmt_usd(s['liquidity_usd'])}")
-        if s.get("volume_24h") not in (None, "", "null"):
-            lines.append(f"🔄 Vol 24h: {fmt_usd(s['volume_24h'])}")
+        data = get_tbp_live_data()
+        if not data:
+            tg_send(chat_id, say(lang,
+                "⚠️ TBP Live-Daten gerade nicht verfügbar.",
+                "⚠️ TBP live data not available right now."
+            ), reply_to=msg_id)
+            return jsonify({"ok": True})
 
-        caption = "\n".join(lines) if lines else say(lang, "Keine Daten.", "No data.")
+        price = data.get("price")
+        mc    = data.get("market_cap")
+        vol   = data.get("volume_24h")
+        liq   = data.get("liquidity_usd")
+        chg   = data.get("change_24h")
+        chart = data.get("chart_url")
+
+        caption_lines = [
+            "🐸 <b>TBP Live Data</b>",
+            f"🪙 <b>Price:</b> {fmt_usd(price, 12) if price is not None else 'N/A'}",
+            f"💰 <b>Market Cap:</b> {fmt_usd(mc, 0) if mc is not None else 'N/A'}",
+            f"📊 <b>24h Volume:</b> {fmt_usd(vol, 2) if vol is not None else 'N/A'}",
+            f"💧 <b>Liquidity:</b> {fmt_usd(liq, 2) if liq is not None else 'N/A'}",
+        ]
+
+        if chg is not None:
+            caption_lines.append(f"📈 <b>24h Change:</b> {float(chg):.2f}%")
+
+        caption_lines.extend([
+            "",
+            f"📜 <b>Contract:</b> <code>{TBP_CONTRACT}</code>",
+            f"🔁 <b>Pair:</b> <code>{TBP_PAIR}</code>",
+        ])
+
+        if chart:
+            caption_lines.append("")
+            caption_lines.append(f"📈 <a href=\"{chart}\">Open Live Chart</a>")
+
+        caption = "\n".join(caption_lines).strip()
+
         if TBP_LOGO_URL:
             tg_send_photo(chat_id, TBP_LOGO_URL, caption=caption, reply_to=msg_id)
         else:
-            tg_buttons(chat_id, caption, [("Chart", LINKS["dexscreener"]), ("Sushi", LINKS["buy"])])
+            tg_send(chat_id, caption, reply_to=msg_id, preview=True)
         return jsonify({"ok": True})
 
     if low.startswith("/stats"):
@@ -1896,16 +1963,24 @@ def telegram_webhook():
             tg_send(chat_id, "\n".join(lines), reply_to=msg_id)
             return jsonify({"ok": True})
 
-        s = get_market_stats() or {}
+        data = get_tbp_live_data()
+        if not data:
+            tg_send(chat_id, say(lang,
+                "TBP Stats gerade nicht verfügbar.",
+                "TBP stats not available right now."
+            ), reply_to=msg_id)
+            return jsonify({"ok": True})
+
         lines = [say(lang, "TBP-Stats:", "TBP Stats:")]
-        if s.get("change_24h") not in (None, "", "null"):
-            lines.append(f"• 24h: {s['change_24h']}%")
-        if s.get("volume_24h") not in (None, "", "null"):
-            lines.append(f"• Vol 24h: {fmt_usd(s['volume_24h'])}")
-        if s.get("liquidity_usd") not in (None, "", "null"):
-            lines.append(f"• Liq: {fmt_usd(s['liquidity_usd'])}")
-        if s.get("market_cap") not in (None, "", "null"):
-            lines.append(f"• MC: {fmt_usd(s['market_cap'])}")
+        if data.get("change_24h") is not None:
+            lines.append(f"• 24h: {float(data['change_24h']):.2f}%")
+        if data.get("volume_24h") is not None:
+            lines.append(f"• Vol 24h: {fmt_usd(data['volume_24h'])}")
+        if data.get("liquidity_usd") is not None:
+            lines.append(f"• Liq: {fmt_usd(data['liquidity_usd'])}")
+        if data.get("market_cap") is not None:
+            lines.append(f"• MC: {fmt_usd(data['market_cap'])}")
+
         tg_send(chat_id, "\n".join(lines), reply_to=msg_id)
         return jsonify({"ok": True})
 
