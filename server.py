@@ -369,7 +369,7 @@ sys = (
     + TBP_PUBLIC_KB
 )
 
-    q = (text or "").strip()
+   
 
     raw = call_openai(q, [], mode="tbp", channel="tg")
     # call_openai already has KB injected after Patch 2, but we keep it safe by ensuring sys exists:
