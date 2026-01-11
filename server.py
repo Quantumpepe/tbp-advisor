@@ -1069,6 +1069,7 @@ CRITICAL INSTRUCTIONS:
 - Only share links if the user explicitly asks for links/where/how/buy/mint/scan/chart.
 
 TBP FACTS (use when relevant):
+- Launch / Deployment: April 2025 on Polygon.
 
 - Commitment mechanism (concept): TBP is exploring a voluntary, utility-based commitment mechanism for long-term holders.
   - Not traditional staking; no fixed APY; no guaranteed returns.
