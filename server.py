@@ -351,7 +351,24 @@ def maybe_smart_interject(chat_id: int, text: str, lang: str):
     if score < 3:
         return None
 
-    sys = build_smart_interject_prompt(kind, lang) + "\n\n" + TBP_PUBLIC_KB
+    ANTI_META_RULES = (
+    "CRITICAL INSTRUCTIONS / WICHTIG:\n"
+    "- Never mention your training data cutoff, training date, or internal model limitations.\n"
+    "- Sage niemals Sätze wie „meine Trainingsdaten gehen nur bis ...“.\n"
+    "- Never say phrases like 'my training data goes up to October 2023'.\n"
+    "- Antworte als TBP-AI Projekt-Assistent (TBP facts first), nicht als allgemeines KI-Modell.\n"
+    "- When asked about TBP dates/events, rely ONLY on the provided TBP facts.\n"
+    "- Wenn ein Datum/Detail nicht in den TBP-Fakten steht, sage: „Dazu habe ich keine verifizierten Infos.“\n"
+)
+
+sys = (
+    build_smart_interject_prompt(kind, lang)
+    + "\n\n"
+    + ANTI_META_RULES
+    + "\n"
+    + TBP_PUBLIC_KB
+)
+
     q = (text or "").strip()
 
     raw = call_openai(q, [], mode="tbp", channel="tg")
