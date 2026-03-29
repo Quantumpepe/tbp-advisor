@@ -943,6 +943,7 @@ def get_user_notes(chat_id: int, user_id: int):
 # FAQ SHORTCUTS (fast + stable)
 # =========================
 
+
 def faq_reply(text: str, lang: str, is_cboost_chat: bool) -> str:
     t = (text or "").lower().strip()
 
@@ -954,174 +955,129 @@ def faq_reply(text: str, lang: str, is_cboost_chat: bool) -> str:
     if not is_cboost_chat:
         # Smart Telegram-style defaults for common TBP questions
         if any(k in t for k in ["what new", "what's new", "update", "news", "tbp update", "neu bei tbp", "was ist neu"]):
-            return say(lang,
-                "Hey 👋
+            return say(
+                lang,
+                """Hey 👋
 
 Wir bauen Schritt für Schritt.
 
+Nexus Analyt ist bereits live:
+• Free: Tracking, Watchlist, Basic Tools
+• Pro ($15): AI Analysis + Grid Trader
 
-                "Nexus Analyt ist bereits live:
+TBP entwickelt sich als Ecosystem-Layer darum herum — nicht als Ersatz für die App.
 
-                "• Free: Tracking, Watchlist, Basic Tools
+Polygon ist das Original-Home. Base ist als nächster Wachstumsschritt geplant.
 
-                "• Pro ($15): AI Analysis + Grid Trader
-
-
-                "TBP entwickelt sich als Ecosystem-Layer darum herum — nicht als Ersatz für die App.
-
-
-                "Polygon ist das Original-Home. Base ist als nächster Wachstumsschritt geplant.
-
-
-                "Kein Hype — wir bauen einfach weiter.",
-                "Hey 👋
+Kein Hype — wir bauen einfach weiter.""",
+                """Hey 👋
 
 We're building step by step.
 
+Nexus Analyt is already live:
+• Free: tracking, watchlist, basic tools
+• Pro ($15): AI Analysis + Grid Trader
 
-                "Nexus Analyt is already live:
+TBP is evolving as the ecosystem layer around this — not replacing the app.
 
-                "• Free: tracking, watchlist, basic tools
+Polygon is the original home. Base is planned as the next step.
 
-                "• Pro ($15): AI Analysis + Grid Trader
-
-
-                "TBP is evolving as the ecosystem layer around this — not replacing the app.
-
-
-                "Polygon is the original home. Base is planned as the next step.
-
-
-                "No hype — just building."
+No hype — just building."""
             )
 
         if any(k in t for k in ["what is tbp", "about tbp", "tbp token", "was ist tbp", "was ist turbopepe"]):
-            return say(lang,
-                "TBP ist der Ecosystem-Layer von TurboPepe-AI.
+            return say(
+                lang,
+                """TBP ist der Ecosystem-Layer von TurboPepe-AI.
 
+Nexus Analyt ist das Live-Produkt.
 
-                "Nexus Analyt ist das Live-Produkt.
+TBP ist dafür gedacht, Utility rund um AI-Tools, Market Intelligence und spätere Automation aufzubauen.
 
-                "TBP ist dafür gedacht, Utility rund um AI-Tools, Market Intelligence und spätere Automation aufzubauen.
+Polygon ist der Ursprung. Base ist als Expansion geplant.""",
+                """TBP is the ecosystem layer of TurboPepe-AI.
 
+Nexus Analyt is the live product.
 
-                "Polygon ist der Ursprung. Base ist als Expansion geplant.",
-                "TBP is the ecosystem layer of TurboPepe-AI.
+TBP is designed to expand utility around AI tools, market intelligence and future automation.
 
-
-                "Nexus Analyt is the live product.
-
-
-                "TBP is designed to expand utility around AI tools, market intelligence and future automation.
-
-
-                "Polygon is the origin. Base is planned as expansion."
+Polygon is the origin. Base is planned as expansion."""
             )
 
         if any(k in t for k in ["nexus", "nexus analyt", "the app", "app?"]) and not WORD_LINKS.search(t):
-            return say(lang,
-                "Nexus Analyt ist das Hauptprodukt.
+            return say(
+                lang,
+                """Nexus Analyt ist das Hauptprodukt.
 
+Du kannst es jetzt schon nutzen:
+• Free: Markt-Tracking + Watchlist
+• Pro ($15): AI Analysis + Grid Trader
 
-                "Du kannst es jetzt schon nutzen:
+Es ist als crypto-native AI Tool aufgebaut — nicht nur als Chart-App.""",
+                """Nexus Analyt is the main product.
 
-                "• Free: Markt-Tracking + Watchlist
+You can use it right now:
+• Free: market tracking + watchlist
+• Pro ($15): AI Analysis + Grid Trader
 
-                "• Pro ($15): AI Analysis + Grid Trader
-
-
-                "Es ist als crypto-native AI Tool aufgebaut — nicht nur als Chart-App.",
-                "Nexus Analyt is the main product.
-
-
-                "You can use it right now:
-
-                "• Free: market tracking + watchlist
-
-                "• Pro ($15): AI Analysis + Grid Trader
-
-
-                "It’s built as a crypto-native AI tool — not just charts."
+It’s built as a crypto-native AI tool — not just charts."""
             )
 
         if any(k in t for k in ["base", "base chain"]) and not WORD_LINKS.search(t):
-            return say(lang,
-                "Base ist als Expansion geplant — nicht als Ersatz.
+            return say(
+                lang,
+                """Base ist als Expansion geplant — nicht als Ersatz.
 
+Polygon bleibt das originale Home von TBP.
 
-                "Polygon bleibt das originale Home von TBP.
+Die Idee ist Cross-Chain-Wachstum, Schritt für Schritt.""",
+                """Base is planned as an expansion — not a replacement.
 
+Polygon remains the original home of TBP.
 
-                "Die Idee ist Cross-Chain-Wachstum, Schritt für Schritt.",
-                "Base is planned as an expansion — not a replacement.
-
-
-                "Polygon remains the original home of TBP.
-
-
-                "The goal is cross-chain growth, step by step."
+The goal is cross-chain growth, step by step."""
             )
 
         if any(k in t for k in ["staking", "rewards", "apy", "commitment", "lock"]) and not WORD_LINKS.search(t):
-            return say(lang,
-                "Es gibt kein klassisches Staking mit festen Rewards.
+            return say(
+                lang,
+                """Es gibt kein klassisches Staking mit festen Rewards.
 
+Erforscht wird eher ein freiwilliges Commitment-Modell:
+• kein fixes APY
+• keine garantierten Returns
+• keine automatischen Auszahlungen
 
-                "Erforscht wird eher ein freiwilliges Commitment-Modell:
+Der Fokus liegt zuerst auf Utility.""",
+                """There’s no traditional staking with fixed rewards.
 
-                "• kein fixes APY
+What may be explored is a voluntary commitment model:
+• no fixed APY
+• no guaranteed returns
+• no automatic payouts
 
-                "• keine garantierten Returns
-
-                "• keine automatischen Auszahlungen
-
-
-                "Der Fokus liegt zuerst auf Utility.",
-                "There’s no traditional staking with fixed rewards.
-
-
-                "What may be explored is a voluntary commitment model:
-
-                "• no fixed APY
-
-                "• no guaranteed returns
-
-                "• no automatic payouts
-
-
-                "The focus is utility first."
+The focus is utility first."""
             )
 
         if any(k in t for k in ["plan", "roadmap", "zukunft", "future"]) and any(k in t for k in ["tbp", "turbopepe", "nft", "ai", "bot", "project"]):
-            return say(lang,
-                "🧭 <b>TBP Plan (kurz)</b>
+            return say(
+                lang,
+                """🧭 <b>TBP Plan (kurz)</b>
+1) Nexus Analyt als Live-Produkt weiter ausbauen
+2) AI, Bots und Monitoring stärker machen
+3) NFTs als Access-/Utility-Layer weiterentwickeln
+4) Sichtbarkeit organisch erhöhen
+5) Base als Expansion sauber vorbereiten
 
-                "1) Nexus Analyt als Live-Produkt weiter ausbauen
+Wenn du willst, erkläre ich dir <b>Nexus</b>, <b>TBP Utility</b> oder <b>Base</b> genauer.""",
+                """🧭 <b>TBP Plan (short)</b>
+1) Keep building Nexus Analyt as the live product
+2) Expand AI, bots and monitoring
+3) Grow NFTs as an access / utility layer
+4) Increase visibility organically
+5) Prepare Base as a clean expansion path
 
-                "2) AI, Bots und Monitoring stärker machen
-
-                "3) NFTs als Access-/Utility-Layer weiterentwickeln
-
-                "4) Sichtbarkeit organisch erhöhen
-
-                "5) Base als Expansion sauber vorbereiten
-
-
-                "Wenn du willst, erkläre ich dir <b>Nexus</b>, <b>TBP Utility</b> oder <b>Base</b> genauer.",
-                "🧭 <b>TBP Plan (short)</b>
-
-                "1) Keep building Nexus Analyt as the live product
-
-                "2) Expand AI, bots and monitoring
-
-                "3) Grow NFTs as an access / utility layer
-
-                "4) Increase visibility organically
-
-                "5) Prepare Base as a clean expansion path
-
-
-                "If you want, I can explain <b>Nexus</b>, <b>TBP utility</b> or <b>Base</b> in more detail."
+If you want, I can explain <b>Nexus</b>, <b>TBP utility</b> or <b>Base</b> in more detail."""
             )
 
         if "lp" in t and ("burn" in t or "burned" in t or "geburn" in t):
@@ -1143,48 +1099,33 @@ We're building step by step.
             )
 
         if WORD_PRICE.search(t) and not WORD_LINKS.search(t):
-            return say(lang,
-                "Der Preis bewegt sich durch Marktaktivität, Liquidität und Adoption.
+            return say(
+                lang,
+                """Der Preis bewegt sich durch Marktaktivität, Liquidität und Adoption.
 
-"
-                "Im Fokus stehen gerade:
-"
-                "• Nexus weiter ausbauen
-"
-                "• Utility erweitern
-"
-                "• Wachstum vorbereiten
+Im Fokus stehen gerade:
+• Nexus weiter ausbauen
+• Utility erweitern
+• Wachstum vorbereiten
 
-"
-                "Das ist die Basis für langfristigen Wert.",
-                "Price moves with market activity, liquidity and adoption.
+Das ist die Basis für langfristigen Wert.""",
+                """Price moves with market activity, liquidity and adoption.
 
-"
-                "Right now the focus is:
-"
-                "• building Nexus
-"
-                "• expanding utility
-"
-                "• preparing growth
+Right now the focus is:
+• building Nexus
+• expanding utility
+• preparing growth
 
-"
-                "That’s what drives long-term value."
+That’s what drives long-term value."""
             )
 
         if WORD_LINKS.search(t):
             return (
-                say(lang, "🔗 <b>TBP Links</b>
-", "🔗 <b>TBP Links</b>
-") +
-                f"• Website: {LINKS['website']}
-"
-                f"• Buy (Sushi): {LINKS['buy']}
-"
-                f"• Chart: {LINKS['dexscreener']}
-"
-                f"• Scan: {LINKS['contract_scan']}
-"
+                say(lang, "🔗 <b>TBP Links</b>\n", "🔗 <b>TBP Links</b>\n") +
+                f"• Website: {LINKS['website']}\n"
+                f"• Buy (Sushi): {LINKS['buy']}\n"
+                f"• Chart: {LINKS['dexscreener']}\n"
+                f"• Scan: {LINKS['contract_scan']}\n"
                 f"• NFTs: {LINKS['nfts']}"
             )
 
