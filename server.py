@@ -959,39 +959,39 @@ def faq_reply(text: str, lang: str, is_cboost_chat: bool) -> str:
 
 Wir bauen Schritt für Schritt.
 
-"
+
                 "Nexus Analyt ist bereits live:
-"
+
                 "• Free: Tracking, Watchlist, Basic Tools
-"
+
                 "• Pro ($15): AI Analysis + Grid Trader
 
-"
+
                 "TBP entwickelt sich als Ecosystem-Layer darum herum — nicht als Ersatz für die App.
 
-"
+
                 "Polygon ist das Original-Home. Base ist als nächster Wachstumsschritt geplant.
 
-"
+
                 "Kein Hype — wir bauen einfach weiter.",
                 "Hey 👋
 
 We're building step by step.
 
-"
+
                 "Nexus Analyt is already live:
-"
+
                 "• Free: tracking, watchlist, basic tools
-"
+
                 "• Pro ($15): AI Analysis + Grid Trader
 
-"
+
                 "TBP is evolving as the ecosystem layer around this — not replacing the app.
 
-"
+
                 "Polygon is the original home. Base is planned as the next step.
 
-"
+
                 "No hype — just building."
             )
 
@@ -999,23 +999,22 @@ We're building step by step.
             return say(lang,
                 "TBP ist der Ecosystem-Layer von TurboPepe-AI.
 
-"
+
                 "Nexus Analyt ist das Live-Produkt.
 
-"
                 "TBP ist dafür gedacht, Utility rund um AI-Tools, Market Intelligence und spätere Automation aufzubauen.
 
-"
+
                 "Polygon ist der Ursprung. Base ist als Expansion geplant.",
                 "TBP is the ecosystem layer of TurboPepe-AI.
 
-"
+
                 "Nexus Analyt is the live product.
 
-"
+
                 "TBP is designed to expand utility around AI tools, market intelligence and future automation.
 
-"
+
                 "Polygon is the origin. Base is planned as expansion."
             )
 
@@ -1023,25 +1022,25 @@ We're building step by step.
             return say(lang,
                 "Nexus Analyt ist das Hauptprodukt.
 
-"
+
                 "Du kannst es jetzt schon nutzen:
-"
+
                 "• Free: Markt-Tracking + Watchlist
-"
+
                 "• Pro ($15): AI Analysis + Grid Trader
 
-"
+
                 "Es ist als crypto-native AI Tool aufgebaut — nicht nur als Chart-App.",
                 "Nexus Analyt is the main product.
 
-"
+
                 "You can use it right now:
-"
+
                 "• Free: market tracking + watchlist
-"
+
                 "• Pro ($15): AI Analysis + Grid Trader
 
-"
+
                 "It’s built as a crypto-native AI tool — not just charts."
             )
 
@@ -1049,17 +1048,17 @@ We're building step by step.
             return say(lang,
                 "Base ist als Expansion geplant — nicht als Ersatz.
 
-"
+
                 "Polygon bleibt das originale Home von TBP.
 
-"
+
                 "Die Idee ist Cross-Chain-Wachstum, Schritt für Schritt.",
                 "Base is planned as an expansion — not a replacement.
 
-"
+
                 "Polygon remains the original home of TBP.
 
-"
+
                 "The goal is cross-chain growth, step by step."
             )
 
@@ -1067,61 +1066,61 @@ We're building step by step.
             return say(lang,
                 "Es gibt kein klassisches Staking mit festen Rewards.
 
-"
+
                 "Erforscht wird eher ein freiwilliges Commitment-Modell:
-"
+
                 "• kein fixes APY
-"
+
                 "• keine garantierten Returns
-"
+
                 "• keine automatischen Auszahlungen
 
-"
+
                 "Der Fokus liegt zuerst auf Utility.",
                 "There’s no traditional staking with fixed rewards.
 
-"
+
                 "What may be explored is a voluntary commitment model:
-"
+
                 "• no fixed APY
-"
+
                 "• no guaranteed returns
-"
+
                 "• no automatic payouts
 
-"
+
                 "The focus is utility first."
             )
 
         if any(k in t for k in ["plan", "roadmap", "zukunft", "future"]) and any(k in t for k in ["tbp", "turbopepe", "nft", "ai", "bot", "project"]):
             return say(lang,
                 "🧭 <b>TBP Plan (kurz)</b>
-"
+
                 "1) Nexus Analyt als Live-Produkt weiter ausbauen
-"
+
                 "2) AI, Bots und Monitoring stärker machen
-"
+
                 "3) NFTs als Access-/Utility-Layer weiterentwickeln
-"
+
                 "4) Sichtbarkeit organisch erhöhen
-"
+
                 "5) Base als Expansion sauber vorbereiten
 
-"
+
                 "Wenn du willst, erkläre ich dir <b>Nexus</b>, <b>TBP Utility</b> oder <b>Base</b> genauer.",
                 "🧭 <b>TBP Plan (short)</b>
-"
+
                 "1) Keep building Nexus Analyt as the live product
-"
+
                 "2) Expand AI, bots and monitoring
-"
+
                 "3) Grow NFTs as an access / utility layer
-"
+
                 "4) Increase visibility organically
-"
+
                 "5) Prepare Base as a clean expansion path
 
-"
+
                 "If you want, I can explain <b>Nexus</b>, <b>TBP utility</b> or <b>Base</b> in more detail."
             )
 
