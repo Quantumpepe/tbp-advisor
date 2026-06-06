@@ -77,13 +77,6 @@ CORE TBP FACTS (public)
 - If Base contracts, pools or links are not live yet, say Base is planned / coming soon.
 - Never claim Base is already live unless verified in the current configuration.
 
-NEXUS ANALYT
-- Nexus Analyt is the main live product inside the TBP-AI ecosystem.
-- Nexus Analyt has a mostly free mode.
-- Nexus Analyt Pro is activated through a 15 USD subscription or a redeem code.
-- Nexus Analyt Pro unlocks AI Analysis and the Grid Trader.
-- TBP does NOT replace the Nexus Analyt Pro subscription.
-- TBP may become an ecosystem utility / access layer around the broader TBP-AI vision, but the app's Pro subscription remains subscription-based.
 
 TBP UTILITY / COMMITMENT
 - TBP is positioned as an ecosystem utility and access layer, not as a guaranteed reward or yield token.
@@ -120,7 +113,6 @@ MISINFORMATION POLICY
 NEVER CLAIM
 - Never claim guaranteed profits.
 - Never claim guaranteed staking rewards.
-- Never claim TBP replaces the Nexus Analyt Pro subscription.
 - Never claim users are forced to migrate from Polygon to Base.
 - Never claim Base is live if it is not verified.
 - If you are unsure about a date or number, say you do not have verified information.
@@ -961,11 +953,14 @@ def faq_reply(text: str, lang: str, is_cboost_chat: bool) -> str:
 
 Wir bauen Schritt für Schritt.
 
-Nexus Analyt ist bereits live:
-• Free: Tracking, Watchlist, Basic Tools
-• Pro ($15): AI Analysis + Grid Trader
+TBP-AI hat bereits live:
+• Website AI Assistant
+• Telegram Assistant
+• Live BuyBot
+• Security-Filter
+• NFT Access Layer
 
-TBP entwickelt sich als Ecosystem-Layer darum herum — nicht als Ersatz für die App.
+Der Fokus liegt auf einem eigenständigen TBP-AI Ökosystem mit Security, Market Intelligence und Automatisierung.
 
 Polygon ist das Original-Home. Base ist als nächster Wachstumsschritt geplant.
 
@@ -974,11 +969,14 @@ Kein Hype — wir bauen einfach weiter.""",
 
 We're building step by step.
 
-Nexus Analyt is already live:
-• Free: tracking, watchlist, basic tools
-• Pro ($15): AI Analysis + Grid Trader
+TBP-AI already has live components:
+• Website AI Assistant
+• Telegram Assistant
+• Live BuyBot
+• Security filters
+• NFT access layer
 
-TBP is evolving as the ecosystem layer around this — not replacing the app.
+The focus is an independent TBP-AI ecosystem for security, market intelligence and automation.
 
 Polygon is the original home. Base is planned as the next step.
 
@@ -988,41 +986,17 @@ No hype — just building."""
         if any(k in t for k in ["what is tbp", "about tbp", "tbp token", "was ist tbp", "was ist turbopepe"]):
             return say(
                 lang,
-                """TBP ist der Ecosystem-Layer von TurboPepe-AI.
+                """TBP ist der Utility- und Community-Layer von TurboPepe-AI.
 
-Nexus Analyt ist das Live-Produkt.
-
-TBP ist dafür gedacht, Utility rund um AI-Tools, Market Intelligence und spätere Automation aufzubauen.
+TBP-AI verbindet Meme-Kultur mit echten AI-Funktionen wie Website Assistant, Telegram Assistant, BuyBot, Security-Filtern und späteren Market-Intelligence-Tools.
 
 Polygon ist der Ursprung. Base ist als Expansion geplant.""",
-                """TBP is the ecosystem layer of TurboPepe-AI.
+                """TBP is the utility and community layer of TurboPepe-AI.
 
-Nexus Analyt is the live product.
-
-TBP is designed to expand utility around AI tools, market intelligence and future automation.
+TBP-AI combines meme culture with real AI functions like the website assistant, Telegram assistant, buy bot, security filters and future market-intelligence tools.
 
 Polygon is the origin. Base is planned as expansion."""
             )
-
-        if any(k in t for k in ["nexus", "nexus analyt", "the app", "app?"]) and not WORD_LINKS.search(t):
-            return say(
-                lang,
-                """Nexus Analyt ist das Hauptprodukt.
-
-Du kannst es jetzt schon nutzen:
-• Free: Markt-Tracking + Watchlist
-• Pro ($15): AI Analysis + Grid Trader
-
-Es ist als crypto-native AI Tool aufgebaut — nicht nur als Chart-App.""",
-                """Nexus Analyt is the main product.
-
-You can use it right now:
-• Free: market tracking + watchlist
-• Pro ($15): AI Analysis + Grid Trader
-
-It’s built as a crypto-native AI tool — not just charts."""
-            )
-
         if any(k in t for k in ["base", "base chain"]) and not WORD_LINKS.search(t):
             return say(
                 lang,
@@ -1063,21 +1037,21 @@ The focus is utility first."""
             return say(
                 lang,
                 """🧭 <b>TBP Plan (kurz)</b>
-1) Nexus Analyt als Live-Produkt weiter ausbauen
-2) AI, Bots und Monitoring stärker machen
+1) Website AI und Telegram Assistant weiter verbessern
+2) BuyBot, Security-Filter und Monitoring stärker machen
 3) NFTs als Access-/Utility-Layer weiterentwickeln
 4) Sichtbarkeit organisch erhöhen
 5) Base als Expansion sauber vorbereiten
 
-Wenn du willst, erkläre ich dir <b>Nexus</b>, <b>TBP Utility</b> oder <b>Base</b> genauer.""",
+Wenn du willst, erkläre ich dir <b>TBP Utility</b>, <b>NFTs</b> oder <b>Base</b> genauer.""",
                 """🧭 <b>TBP Plan (short)</b>
-1) Keep building Nexus Analyt as the live product
-2) Expand AI, bots and monitoring
+1) Keep improving the website AI and Telegram Assistant
+2) Expand the buy bot, security filters and monitoring
 3) Grow NFTs as an access / utility layer
 4) Increase visibility organically
 5) Prepare Base as a clean expansion path
 
-If you want, I can explain <b>Nexus</b>, <b>TBP utility</b> or <b>Base</b> in more detail."""
+If you want, I can explain <b>TBP utility</b>, <b>NFTs</b> or <b>Base</b> in more detail."""
             )
 
         if "lp" in t and ("burn" in t or "burned" in t or "geburn" in t):
@@ -1104,16 +1078,16 @@ If you want, I can explain <b>Nexus</b>, <b>TBP utility</b> or <b>Base</b> in mo
                 """Der Preis bewegt sich durch Marktaktivität, Liquidität und Adoption.
 
 Im Fokus stehen gerade:
-• Nexus weiter ausbauen
-• Utility erweitern
+• AI Assistant und BuyBot verbessern
+• Security- und Market-Intelligence-Utility erweitern
 • Wachstum vorbereiten
 
 Das ist die Basis für langfristigen Wert.""",
                 """Price moves with market activity, liquidity and adoption.
 
 Right now the focus is:
-• building Nexus
-• expanding utility
+• improving the AI assistant and buy bot
+• expanding security and market-intelligence utility
 • preparing growth
 
 That’s what drives long-term value."""
@@ -1234,6 +1208,8 @@ BEHAVIOR:
 
 PROJECT FACTS:
 - TBP is a crypto-native AI ecosystem project.
+- TBP is an independent project with its own branding, roadmap, token utility and community.
+- TBP focuses on AI assistant features, Telegram automation, security filters, buy-bot data, NFTs and future market-intelligence tools.
 - TBP originally launched on Polygon in April 2025.
 - Polygon remains the original home of TBP.
 - Base is a planned expansion path for future growth and cross-chain utility.
@@ -1241,16 +1217,6 @@ PROJECT FACTS:
 - Do not say TBP is leaving Polygon.
 - If Base contracts, pools or links are not live yet, say Base is planned / coming soon.
 - Never claim Base is already live unless it is verified in the current configuration.
-
-NEXUS ANALYT:
-- Nexus Analyt is an official tool created within the TBP-AI ecosystem.
-- Nexus Analyt is the main live product.
-- Nexus Analyt has a mostly free mode.
-- Nexus Analyt Pro is activated through a 15 USD subscription or a redeem code.
-- Nexus Analyt Pro unlocks AI Analysis and the Grid Trader.
-- TBP does NOT replace the Nexus Analyt Pro subscription.
-- When users ask about Nexus Analyt, explain it as part of the TBP-AI ecosystem, not as a separate project.
-- Good positioning: Nexus Analyt is the live product layer, while TBP is the broader ecosystem and utility layer.
 
 COMMITMENT / UTILITY:
 - TBP is positioned as an ecosystem utility and access layer, not as a guaranteed reward or yield token.
@@ -1270,13 +1236,11 @@ ON-CHAIN FACTS:
 
 RESPONSE PREFERENCES:
 - When users ask “what is TBP?” or similar, emphasize that TBP is more than a meme token and is tied to live AI tools, automation and ecosystem growth.
-- When users ask about Nexus Analyt, make clear that it is already live and usable today.
 - When users ask about future plans, frame them as expansion, not promises.
 
 NEVER CLAIM:
 - Never claim guaranteed profits.
 - Never claim guaranteed staking rewards.
-- Never claim TBP replaces the Nexus Analyt Pro subscription.
 - Never claim users are forced to migrate from Polygon to Base."""
         else:
             system_msg = """You are TBP-AI, the official assistant of TurboPepe-AI (TBP) on Polygon.
@@ -1292,19 +1256,13 @@ STYLE:
 
 CURRENT PROJECT:
 - TBP is a community-driven meme + AI ecosystem token originally launched on Polygon in April 2025.
+- TBP is an independent project with its own branding, roadmap, token utility and community.
+- TBP focuses on AI assistant features, Telegram automation, security filters, buy-bot data, NFTs and future market-intelligence tools.
 - Polygon remains the original home of TBP.
 - Base is a planned expansion path for future growth and cross-chain utility.
 - Correct phrasing: “TBP is expanding to Base.”
 - Do not say TBP is leaving Polygon.
 - If Base is not verified as live, say it is planned / coming soon.
-
-NEXUS ANALYT:
-- Nexus Analyt is part of the TBP-AI ecosystem and is the main live product.
-- Nexus Analyt has a mostly free mode.
-- Nexus Analyt Pro is activated through a 15 USD subscription or a redeem code.
-- Nexus Analyt Pro unlocks AI Analysis and the Grid Trader.
-- TBP does NOT replace the Nexus Analyt Pro subscription.
-- Good positioning: Nexus Analyt is the live product layer, while TBP is the broader ecosystem / utility layer.
 
 COMMITMENT MECHANISM (concept):
 - TBP is exploring a voluntary, utility-based commitment mechanism for long-term holders.
@@ -1330,14 +1288,12 @@ VISION:
 - Be clear what exists today vs future plans. No guarantees.
 
 RESPONSE PREFERENCES:
-- For “what is TBP?” style questions, describe TBP as more than a meme token: an AI ecosystem with a live app, assistant, buy bot and future utility expansion.
-- For Nexus questions, mention that the app is already live today.
+- For “what is TBP?” style questions, describe TBP as more than a meme token: an AI ecosystem with a website assistant, Telegram assistant, buy bot, NFTs and future utility expansion.
 - For Base questions, frame it as expansion and growth, not escape or replacement.
 
 NEVER CLAIM:
 - Never claim guaranteed profits.
 - Never claim guaranteed staking rewards.
-- Never claim TBP replaces the Nexus Analyt Pro subscription.
 - Never claim users are forced to migrate from Polygon to Base.
 - Never claim Base is already live if that is not verified."""
 
