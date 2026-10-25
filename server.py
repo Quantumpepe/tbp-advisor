@@ -115,7 +115,8 @@ MEM = {
     "ctx": [],                 # globaler Kontext (Web AI), keep small
     "last_autopost": None,
     "chat_count": 0,
-    "raid_on": False,
+    "raid_on": False,          # legacy placeholder; active raids are per chat in raids
+    "raids": {},
     "raid_msg": "Drop a fresh TBP meme! 🐸⚡",
     "interject_log": {},        # chat_id -> deque[timestamps]
 
@@ -883,6 +884,7 @@ is not verification of its current contents. Never request wallet secrets.
 Output plain text with short paragraphs and optional bullets; do not output HTML tags.
 """
     system_msg += "\n\n" + TBP_PUBLIC_KB
+    system_msg += "\nCOMMUNITY RAID FEATURE: Admins use /raid followed by an optional duration (1h or 2h), an HTTPS X-post URL and an optional message. Default duration is 1 hour; 2h selects 2 hours. At most two reminders occur after one third and two thirds of the duration. /raidstatus shows the target and voluntary participation reports, /raiddone records one report per Telegram user, /raidstop ends it. Reports are not verified likes or reposts. State is per chat and resets on restart. The server never acts on X for users."
     system_msg += "\nCONFIGURED PROJECT DESTINATIONS:\n" + json.dumps(LINKS, ensure_ascii=False)
     system_msg += "\nConfigured assistant model: " + OPENAI_MODEL
     if response_instruction:
@@ -1362,6 +1364,169 @@ def maybe_idle_prompt(chat_id, now=None):
     return True
 
 
+
+# Community raids are Telegram announcements for a public X post. Participation
+# is self-reported; this server never likes, replies to or reposts anything on X.
+RAID_LOCK = threading.RLock()
+RAID_DURATION_SEC = 60 * 60
+
+
+def raid_url(value):
+    from urllib.parse import urlsplit
+    try:
+        parsed = urlsplit(value.strip())
+        if parsed.scheme != "https" or parsed.username or parsed.password or parsed.port:
+            return None
+        if parsed.hostname not in {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}:
+            return None
+        match = re.fullmatch(r"/(?:[a-zA-Z0-9_]{1,15}/status|i/web/status)/(\d{1,25})/?", parsed.path)
+        if not match:
+            return None
+        # Drop tracking parameters; preserve only the verified public-post path.
+        return "https://x.com" + parsed.path.rstrip("/")
+    except (ValueError, AttributeError):
+        return None
+
+
+def raid_card(raid, now=None, title=None):
+    from html import escape
+    now = now or datetime.utcnow()
+    lang = raid['lang']
+    minutes = max(0, int((raid['ends_at'] - now).total_seconds() + 59) // 60)
+    title = title or say(lang, "🚀 TBP Community-Raid", "🚀 TBP community raid")
+    lines = [escape(title), "", escape(raid['message']), "", say(lang,
+        "Schaut euch den Post an. Wenn ihr mögt, unterstützt ihn mit einem Like, Repost oder einem eigenen, passenden Kommentar.",
+        "Take a look at the post. If you like, support it with a like, repost or your own relevant comment."),
+        "", say(lang, f"Noch etwa {minutes} Min. · Teilnahmemeldungen: {len(raid['participants'])}",
+                f"About {minutes} min left · Participation reports: {len(raid['participants'])}"),
+        say(lang, "Danach /raiddone senden. Die Meldungen sind freiwillig und nicht über X geprüft.",
+            "Send /raiddone afterwards. Reports are voluntary and not verified through X.")]
+    return "\n".join(lines)
+
+
+def process_raid_tick(chat_id, now=None):
+    now = now or datetime.utcnow()
+    with RAID_LOCK:
+        raid = MEM.setdefault('raids', {}).get(chat_id)
+        if not raid or not raid['active']:
+            return False
+        lang = raid['lang']
+        if now >= raid['ends_at']:
+            raid['active'] = False
+            MEM.setdefault('last_idle', {})[chat_id] = now
+            output = say(lang,
+                f"🏁 Community-Raid beendet. Danke fürs Mitmachen! {len(raid['participants'])} freiwillige Teilnahmemeldungen (nicht über X geprüft).",
+                f"🏁 Community raid finished. Thanks for joining! {len(raid['participants'])} voluntary participation reports (not verified through X).")
+            url = None
+        elif now >= raid['next_reminder'] and raid['reminders'] < 2:
+            raid['reminders'] += 1
+            raid['next_reminder'] = now + timedelta(seconds=raid['reminder_interval'])
+            output = raid_card(raid, now, say(lang, "🐸 Community-Raid läuft noch", "🐸 Community raid is still running"))
+            url = raid['url']
+        else:
+            return True
+    if url:
+        tg_buttons(chat_id, output, [(say(lang, "Zum X-Post", "Open X post"), url)])
+    else:
+        tg_send(chat_id, output, preview=False)
+    return True
+
+
+def handle_raid_command(text, chat_id, user_id, msg, lang):
+    text = text.strip()
+    if re.fullmatch(r"raid[.!]?", text, re.I):
+        text = '/raid'
+    elif re.match(r"^raid\s+(?:(?:1h|2h)\s+)?https://", text, re.I):
+        text = '/' + text
+    match = re.fullmatch(r"/(raid|raidstatus|raidstop|raiddone)(?:@[a-zA-Z0-9_]+)?(?:\s+([\s\S]*))?", text.strip(), re.I)
+    if not match:
+        return False
+    command = match.group(1).lower()
+    argument = (match.group(2) or '').strip()
+    reply_to = msg.get('message_id')
+    if command == 'raid' and argument.lower() in {'stop', 'status'}:
+        command, argument = 'raid' + argument.lower(), ''
+    # Authorization is identical to the existing mode-switch authorization.
+    if command == 'raidstop' or (command == 'raid' and argument):
+        if not can_change_mode(chat_id, user_id, msg):
+            tg_send(chat_id, say(lang, "Nur Admins können Raids starten oder stoppen.",
+                                "Only admins can start or stop raids."), reply_to=reply_to)
+            return True
+    if command == 'raid' and argument:
+        parts = argument.split(None, 1)
+        duration = RAID_DURATION_SEC
+        if parts[0].lower() in {'1h', '2h'}:
+            duration = int(parts[0][0]) * 60 * 60
+            parts = parts[1].split(None, 1) if len(parts) > 1 else ['']
+        url = raid_url(parts[0])
+        if not url:
+            tg_send(chat_id, say(lang,
+                "Nutze /raid 1h oder /raid 2h mit einem gültigen HTTPS-Link zu einem X-Post: /raid 2h https://x.com/Name/status/123 Optionaler Aufruf. Ohne Zeitangabe: 1 Stunde.",
+                "Use /raid 1h or /raid 2h with an HTTPS link to an X post: /raid 2h https://x.com/Name/status/123 Optional message. Default: 1 hour."), reply_to=reply_to)
+            return True
+        message = parts[1].strip() if len(parts) > 1 else say(lang,
+            "TBP-Community, dieser Post wartet auf eure Ideen 🐸", "TBP community, bring your ideas to this post 🐸")
+        if len(message) > 500:
+            tg_send(chat_id, say(lang, "Der Raid-Aufruf darf höchstens 500 Zeichen haben.",
+                                "The raid message may contain at most 500 characters."), reply_to=reply_to)
+            return True
+        now = datetime.utcnow()
+        with RAID_LOCK:
+            existing = MEM.setdefault('raids', {}).get(chat_id)
+            if existing and existing['active'] and now < existing['ends_at']:
+                output = say(lang, "Es läuft bereits ein Raid. Nutze /raidstatus oder zuerst /raidstop.",
+                             "A raid is already running. Use /raidstatus or /raidstop first.")
+                buttons = None
+            else:
+                raid = {'active': True, 'url': url, 'message': message, 'lang': lang,
+                        'started_at': now, 'ends_at': now + timedelta(seconds=duration),
+                        'reminder_interval': duration // 3,
+                        'next_reminder': now + timedelta(seconds=duration // 3),
+                        'reminders': 0, 'participants': set()}
+                MEM['raids'][chat_id] = raid
+                output = raid_card(raid, now)
+                buttons = [(say(lang, "Zum X-Post", "Open X post"), url)]
+        if buttons:
+            tg_buttons(chat_id, output, buttons)
+        else:
+            tg_send(chat_id, output, reply_to=reply_to)
+        return True
+    with RAID_LOCK:
+        raid = MEM.setdefault('raids', {}).get(chat_id)
+        active = bool(raid and raid['active'] and datetime.utcnow() < raid['ends_at'])
+        buttons = None
+        if command == 'raidstop':
+            if raid:
+                raid['active'] = False
+                MEM.setdefault('last_idle', {})[chat_id] = datetime.utcnow()
+            output = say(lang, "Raid gestoppt. Es folgen keine weiteren Raid-Erinnerungen.",
+                         "Raid stopped. No further raid reminders will be sent.")
+        elif command == 'raiddone':
+            if not active:
+                output = say(lang, "Gerade läuft kein Raid.", "No raid is running right now.")
+            elif user_id is None or msg.get('sender_chat'):
+                output = say(lang, "Bitte melde die Teilnahme über dein persönliches Telegram-Profil.",
+                             "Please report participation from your personal Telegram profile.")
+            else:
+                already = user_id in raid['participants']
+                raid['participants'].add(user_id)
+                output = say(lang,
+                    "Deine Teilnahme ist bereits erfasst." if already else "Danke! Deine freiwillige Teilnahmemeldung ist erfasst 🐸",
+                    "Your participation is already recorded." if already else "Thanks! Your voluntary participation report is recorded 🐸")
+        elif active:
+            output = raid_card(raid)
+            buttons = [(say(lang, "Zum X-Post", "Open X post"), raid['url'])]
+        else:
+            output = say(lang,
+                "Kein aktiver Raid. Admins starten einen Raid mit:\n/raid 1h https://x.com/Name/status/123 Optionaler Aufruf\nFür 2 Stunden: /raid 2h Link\nOhne Zeitangabe: 1 Stunde.\n\n/raidstatus · /raiddone · /raidstop\nMaximal zwei Erinnerungen. Der Status wird bei einem Serverneustart zurückgesetzt.",
+                "No active raid. Admins can start a raid with:\n/raid 1h https://x.com/Name/status/123 Optional message\nFor 2 hours: /raid 2h Link\nDefault duration: 1 hour.\n\n/raidstatus · /raiddone · /raidstop\nAt most two reminders. State resets when the server restarts.")
+    if buttons:
+        tg_buttons(chat_id, output, buttons)
+    else:
+        tg_send(chat_id, output, reply_to=reply_to, preview=False)
+    return True
+
+
 def start_idle_watchdog_background():
     def loop():
         while True:
@@ -1369,7 +1534,8 @@ def start_idle_watchdog_background():
                 now = datetime.utcnow()
                 for chat_id in list(MEM.get("last_activity", {})):
                     if chat_id:
-                        maybe_idle_prompt(chat_id, now)
+                        if not process_raid_tick(chat_id, now):
+                            maybe_idle_prompt(chat_id, now)
             except Exception as exc:
                 print("[IDLE] loop error:", type(exc).__name__)
             time.sleep(30)
@@ -1495,6 +1661,27 @@ def handle_extra_commands(text, chat_id, lang, msg_id=None):
 
     return False
 
+def telegram_bot_identity():
+    """Resolve our own identity once per hour, without logging the token."""
+    now = time.time()
+    cached = MEM.get('_bot_identity_cache')
+    if cached and cached['until'] > now:
+        return cached['identity']
+    identity = {}
+    if TELEGRAM_TOKEN_TBP:
+        try:
+            response = requests.get(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN_TBP}/getMe", timeout=5)
+            data = response.json() if response.ok else {}
+            result = data.get('result') or {}
+            if data.get('ok') and result.get('id') and result.get('username'):
+                identity = {'id': result['id'], 'username': result['username']}
+        except Exception:
+            pass
+    MEM['_bot_identity_cache'] = {'identity': identity, 'until': now + (3600 if identity else 60)}
+    return identity
+
+
 @app.route("/telegram", methods=["GET", "POST"])
 def telegram_webhook():
     if request.method == "GET":
@@ -1517,12 +1704,14 @@ def telegram_webhook():
     new_members = msg.get("new_chat_members") or []
 
     reply_to = msg.get("reply_to_message") or {}
-    replied_to_bot = False
-    try:
-        replied_from = (reply_to.get("from") or {}).get("is_bot")
-        replied_to_bot = bool(replied_from)
-    except Exception:
-        replied_to_bot = False
+    replied_from = reply_to.get('from') or {}
+    addressed = re.match(r"^/[a-zA-Z0-9_]+@([a-zA-Z0-9_]+)(?:\s|$)", text)
+    identity = telegram_bot_identity() if addressed or replied_from.get('is_bot') else {}
+    if addressed and addressed.group(1).lower() != identity.get('username', '').lower():
+        return jsonify({"ok": True})
+    replied_to_bot = bool(replied_from.get('is_bot') and replied_from.get('id') == identity.get('id') and identity.get('id'))
+    if replied_from.get('is_bot') and not replied_to_bot:
+        return jsonify({"ok": True})
 
     if not chat_id or from_user.get("is_bot"):
         return jsonify({"ok": True})
@@ -1605,6 +1794,9 @@ def telegram_webhook():
         tg_send(chat_id, f"TBP-AI Modus /{MEM['resp_mode']} aktiviert: {descriptions[MEM['resp_mode']]}", reply_to=msg_id)
         return jsonify({"ok": True})
 
+    if handle_raid_command(text, chat_id, user_id, msg, lang):
+        return jsonify({"ok": True})
+
     # Commands
     if low.startswith("/start"):
         tg_buttons(
@@ -1615,7 +1807,7 @@ def telegram_webhook():
         return jsonify({"ok": True})
 
     if low.startswith("/help"):
-        tg_send(chat_id, "/price • /stats • /chart • /links • /nfts • /rules • /security • /id • /about • /dev • /0 • /1 • /2", reply_to=msg_id, preview=False)
+        tg_send(chat_id, "/price • /stats • /chart • /links • /nfts • /rules • /security • /id • /about • /dev • /0 • /1 • /2 • /raid • /raidstatus • /raiddone • /raidstop", reply_to=msg_id, preview=False)
         return jsonify({"ok": True})
 
     if low.startswith("/about") or low.startswith("/dev"):
@@ -1719,10 +1911,6 @@ def telegram_webhook():
 
     if low.startswith("/chart"):
         tg_buttons(chat_id, say(lang, "📊 TBP Live-Chart:", "📊 TBP live chart:"), [("DexScreener", LINKS["dexscreener"]), ("DEXTools", LINKS["dextools"])])
-        return jsonify({"ok": True})
-
-    if text.strip().lower() == "raid.":
-        tg_send(chat_id, say(lang, "🚀 RAID! TBP army bereit! 🐸", "🚀 RAID! TBP army ready! 🐸"), reply_to=msg_id)
         return jsonify({"ok": True})
 
     try:
@@ -1841,6 +2029,9 @@ def telegram_webhook():
             return jsonify({"ok": True})
 
     # NORMAL AI REPLY (Selective, Human)
+    # Unknown commands may belong to another group bot; never send them to AI.
+    if low.startswith('/'):
+        return jsonify({"ok": True})
     if not low.startswith("/"):
         if not should_reply(chat_id, text, replied_to_bot=replied_to_bot):
             return jsonify({"ok": True})
