@@ -1055,7 +1055,7 @@ TOKEN_BUYBOT = {
     },
 }
 
-def fetch_pool_trades(network: str, pool_address: str, token_contract: str = "", limit: int = 25):
+def fetch_pool_trades(network: str, pool_address: str, token_contract: str = "", limit=None):
     url = f"https://api.geckoterminal.com/api/v2/networks/{network}/pools/{pool_address}/trades"
 
     try:
@@ -1125,6 +1125,7 @@ def fetch_pool_trades(network: str, pool_address: str, token_contract: str = "",
         trades.append(
             {
                 "tx_hash": tx_hash,
+                "event_id": item.get("id") or tx_hash,
                 "side": side,
                 "usd": usd,
                 "token_amount": token_amount,
@@ -1136,6 +1137,22 @@ def fetch_pool_trades(network: str, pool_address: str, token_contract: str = "",
     trades.reverse()
     return trades
 
+BUYBOT_POLL_SECONDS = 10
+
+
+def buybot_market_snapshot():
+    # Share optional market data across a burst of alerts instead of fetching twice per buy.
+    now = time.time()
+    cached = MEM.get('_buybot_market_snapshot')
+    if cached and now - cached['at'] < 30:
+        return cached['data']
+    price, mc = get_tbp_price_and_mc()
+    stats = get_market_stats() or {}
+    data = (price, mc, stats.get('volume_24h'))
+    MEM['_buybot_market_snapshot'] = {'at': time.time(), 'data': data}
+    return data
+
+
 def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
     usd = trade.get("usd")
     token_amount = trade.get("token_amount")
@@ -1143,9 +1160,7 @@ def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
     wallet = trade.get("wallet")
     tx_hash = trade.get("tx_hash")
 
-    price_now, mc_now = get_tbp_price_and_mc()
-    stats = get_market_stats() or {}
-    vol_24h = stats.get("volume_24h")
+    price_now, mc_now, vol_24h = buybot_market_snapshot()
 
     price_txt = fmt_usd(price_now, 12) if price_now is not None else "N/A"
     mc_txt = fmt_usd(mc_now, 0) if mc_now is not None else "N/A"
@@ -1169,7 +1184,7 @@ def send_tbp_buy_alert(chat_id: int, trade: dict, is_new: bool):
     caption_lines.extend(
         [
             "",
-            f"💵 <b>Price (after):</b> {price_txt}",
+            f"💵 <b>Price (snapshot):</b> {price_txt}",
             f"🏦 <b>Market Cap:</b> {mc_txt}",
             f"📊 <b>24h Volume:</b> {vol_txt}",
         ]
@@ -1201,54 +1216,43 @@ def process_buybot_for(token_key: str, chat_id: int):
     cfg = TOKEN_BUYBOT.get(token_key)
     if not cfg:
         return
-
-    trades = fetch_pool_trades(
-        cfg["network"],
-        cfg["pool"],
-        cfg.get("token_contract", "")
-    )
+    trades = fetch_pool_trades(cfg['network'], cfg['pool'], cfg.get('token_contract', ''))
     if not trades:
         return
-
-    state = MEM["buybot"][token_key]
-    last_hash = state.get("last_hash")
-
-    hashes = [t.get("tx_hash") for t in trades if t.get("tx_hash")]
-    if not hashes:
+    state = MEM['buybot'][token_key]
+    def event_key(trade):
+        return trade.get('event_id') or trade.get('tx_hash')
+    # Establish the initial baseline without reposting historical buys on restart.
+    if not state.get('initialized'):
+        keys = list(dict.fromkeys(event_key(t) for t in trades if event_key(t)))
+        if not keys:
+            return
+        state['seen_order'] = deque(keys[-2000:])
+        state['seen_events'] = set(state['seen_order'])
+        state['initialized'] = True
+        state['last_hash'] = trades[-1].get('tx_hash')
         return
-
-    if not last_hash:
-        state["last_hash"] = hashes[-1]
-        return
-
-    if last_hash not in hashes:
-        state["last_hash"] = hashes[-1]
-        return
-
-    idx = hashes.index(last_hash)
-    new_trades = trades[idx + 1 : ]
-    if not new_trades:
-        return
-
-    for tr in new_trades:
-        side = (tr.get("side") or "").lower()
-        if "buy" not in side:
+    seen = state['seen_events']
+    order = state['seen_order']
+    for tr in trades:
+        key = event_key(tr)
+        if not key or key in seen:
             continue
+        # A missing old cursor is not grounds to discard new trades in the current window.
+        usd = tr.get('usd') or 0
+        if (tr.get('side') or '').lower() == 'buy' and usd >= cfg['min_usd']:
+            wallet = tr.get('wallet')
+            known = state['known_wallets']
+            is_new = bool(wallet and wallet not in known)
+            send_tbp_buy_alert(chat_id, tr, is_new)
+            if wallet:
+                known.add(wallet)
+        seen.add(key)
+        order.append(key)
+        while len(order) > 2000:
+            seen.discard(order.popleft())
+        state['last_hash'] = tr.get('tx_hash')
 
-        usd = tr.get("usd") or 0
-        if usd is None or usd < cfg["min_usd"]:
-            continue
-
-        wallet = tr.get("wallet")
-        known = state["known_wallets"]
-        is_new = False
-        if wallet and wallet not in known:
-            known.add(wallet)
-            is_new = True
-
-        send_tbp_buy_alert(chat_id, tr, is_new)
-
-    state["last_hash"] = hashes[-1]
 
 def start_buybot_background():
     def loop():
@@ -1259,7 +1263,7 @@ def start_buybot_background():
                     process_buybot_for("tbp", tbp_chat)
             except Exception as e:
                 print(f"[BUYBOT] loop error: {e}")
-            time.sleep(25)
+            time.sleep(BUYBOT_POLL_SECONDS)
 
     threading.Thread(target=loop, daemon=True).start()
 
