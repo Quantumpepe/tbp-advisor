@@ -972,12 +972,36 @@ def human_delay_for(text: str):
 # AUTO-POST (nur TBP)
 # =========================
 
-def autopost_needed():
-    now = datetime.utcnow()
+UPDATE_LOCK = threading.RLock()
+UPDATE_INTERVAL = timedelta(hours=2)
+
+
+def autopost_needed(now=None):
+    now = now or datetime.utcnow()
     last = MEM.get("last_autopost")
     if not last:
-        return True
-    return (now - last) >= timedelta(hours=10)
+        # Start a full interval, never emit an update on the first user question.
+        MEM['last_autopost'] = now
+        return False
+    return (now - last) >= UPDATE_INTERVAL
+
+
+def is_update_request(text):
+    t = (text or '').strip()
+    return bool(re.fullmatch(r'/update(?:@[a-zA-Z0-9_]+)?', t, re.I) or re.fullmatch(
+        r'(?:bitte |please |show (?:me )?(?:a |the )?|zeig(?:e)? (?:mir )?(?:ein |das )?)?'
+        r'(?:tbp[- ]?)?update(?: (?:bitte|please))?[.!?]?', t, re.I))
+
+
+def send_tbp_update(chat_id, lang='en', automatic=False, now=None):
+    now = now or datetime.utcnow()
+    with UPDATE_LOCK:
+        if automatic and not autopost_needed(now):
+            return False
+        # Explicit requests also postpone the next automatic update for two hours.
+        MEM['last_autopost'] = now
+    tg_send(chat_id, autopost_text(lang))
+    return True
 
 def autopost_text(lang="en"):
     p = get_live_price()
@@ -1006,12 +1030,12 @@ def autopost_text(lang="en"):
     return "\n".join(lines)
 
 def start_autopost_background(chat_id: int):
+    with UPDATE_LOCK:
+        autopost_needed()
     def loop():
         while True:
             try:
-                if autopost_needed():
-                    tg_send(chat_id, autopost_text("en"))
-                    MEM["last_autopost"] = datetime.utcnow()
+                send_tbp_update(chat_id, community_language(chat_id), automatic=True)
             except Exception:
                 pass
             time.sleep(60)
@@ -1797,6 +1821,10 @@ def telegram_webhook():
     if handle_raid_command(text, chat_id, user_id, msg, lang):
         return jsonify({"ok": True})
 
+    if is_update_request(text):
+        send_tbp_update(chat_id, lang)
+        return jsonify({"ok": True})
+
     # Commands
     if low.startswith("/start"):
         tg_buttons(
@@ -1807,7 +1835,7 @@ def telegram_webhook():
         return jsonify({"ok": True})
 
     if low.startswith("/help"):
-        tg_send(chat_id, "/price • /stats • /chart • /links • /nfts • /rules • /security • /id • /about • /dev • /0 • /1 • /2 • /raid • /raidstatus • /raiddone • /raidstop", reply_to=msg_id, preview=False)
+        tg_send(chat_id, "/price • /stats • /update • /chart • /links • /nfts • /rules • /security • /id • /about • /dev • /0 • /1 • /2 • /raid • /raidstatus • /raiddone • /raidstop", reply_to=msg_id, preview=False)
         return jsonify({"ok": True})
 
     if low.startswith("/about") or low.startswith("/dev"):
@@ -1912,14 +1940,6 @@ def telegram_webhook():
     if low.startswith("/chart"):
         tg_buttons(chat_id, say(lang, "📊 TBP Live-Chart:", "📊 TBP live chart:"), [("DexScreener", LINKS["dexscreener"]), ("DEXTools", LINKS["dextools"])])
         return jsonify({"ok": True})
-
-    try:
-        if MEM["chat_count"] >= 25:
-            tg_send(chat_id, autopost_text("en"))
-            MEM["chat_count"] = 0
-            MEM["last_autopost"] = datetime.utcnow()
-    except Exception:
-        pass
 
     # SECURITY FILTERS + STRIKES
     if not low.startswith("/") and not is_admin(user_id):
