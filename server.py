@@ -1871,7 +1871,12 @@ def telegram_webhook():
     # Admin-only group participation settings; keep original /0 /1 /2 commands.
     mode_command = re.fullmatch(r"/([012])(?:@[A-Za-z0-9_]+)?", low)
     if mode_command:
-        if not is_admin(user_id):
+        # Telegram anonymous admins appear as sender_chat (the group),
+        # not as their personal user ID. Never grant admin rights on that basis.
+        sender_chat = msg.get("sender_chat") or {}
+        if sender_chat and sender_chat.get("id") == chat_id:
+            tg_send(chat_id, "⚠️ Du sendest anonym als Gruppe. Bitte 'Anonym senden' in Telegram ausschalten und /0, /1 oder /2 erneut senden. Nur so kann ich deine Admin-ID prüfen.", reply_to=msg_id)
+        elif not is_admin(user_id):
             tg_send(chat_id, "⛔ Nur Administratoren dürfen die Antwortstufe ändern.", reply_to=msg_id)
         else:
             selected = mode_command.group(1)
