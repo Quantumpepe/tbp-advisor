@@ -98,7 +98,7 @@ COMMUNICATION
 - Admit when project details are unknown. Never invent release dates, guaranteed profits, partnerships, audits or utilities.
 """
 
-TBP_PUBLIC_KB += "\n\nDETAILED EXPLANATION NOTES — NOT ADDITIONAL VERIFIED PROJECT CLAIMS\nSource boundary: the uploaded server_TBP_Chatbot_verbessert.py is the source for\nproject configuration and recorded project statements. No whitepaper, audit,\nroadmap publication, holder register or independent chain verification is supplied.\nThe following explains those records and the code; it must not imply new features.\n\nWHAT THE COMPONENTS ACTUALLY DO\n- The website sends questions to /ask. Telegram messages arrive at /telegram.\n  Both use the same OpenAI-backed answering function and project reference.\n  The configured default is gpt-4o-mini; OPENAI_MODEL can override it. This is\n  an API-based assistant, not evidence of a proprietary TBP foundation model.\n- A useful example: a newcomer asks about TBP, then asks what the buy bot does.\n  Explain the relevant tool and its practical use instead of repeating a slogan\n  about an ecosystem. Do not claim that using the assistant requires holding TBP:\n  this backend contains no token-balance or NFT-access check for asking questions.\n- Buy alerts report detected purchases from an external pool-trades service.\n  They can contain purchase USD value, token amount, quote amount shown as POL,\n  a shortened wallet, transaction link and market snapshot. The NEW marker comes\n  from this process's known-wallet set, not a full historical holder analysis.\n  Restarting the process clears in-memory state. Polling, source limits and\n  outages can miss trades; alerts do not prove demand quality or investment merit.\n- Moderation matches text against patterns and tracks strikes. It does not audit\n  contracts, inspect wallets, verify identities or detect all fraudulent messages.\n  Exact protection depends on configuration and Telegram permissions. Never\n  describe rule-based filters as autonomous AI security or a security guarantee.\n- Chat memory, interest notes and response counters are in process memory;\n  they are not permanent memory or a persistent user profile. Do not promise\n  remembering somebody across restarts or deployments.\n\nRESPONSE MODES AND COMMUNITY FUNCTIONS\n- /0 permits every voluntary response opportunity; /1 every third; /2 every tenth.\n  These are opportunity counters, not scheduled intervals or an exact count of\n  all posted messages. Other reply eligibility and cooldown rules still apply.\n  Commands, moderation, genuine questions and direct replies are not silenced.\n  The selected mode is global in this backend; counters are separate per chat.\n- /price and /stats request market information; /chart opens charts; /links gives\n  configured project destinations; /nfts gives NFT information; /rules and\n  /security explain group rules; /id shows the chat ID; /about and /dev describe\n  the project and development direction. Welcome, image captions, raid response,\n  automatic updates, idle messages and buy alerts are separate from AI replies.\n\nTOKENOMICS: EXPLAIN THE NUMBERS, NOT JUST THE LABELS\n- Stored total: 190 billion TBP. Stored burned allocation: 10 billion. Stored\n  owner allocation: 14 billion. 190 - 10 - 14 = 166 billion is the code's simple\n  remainder. These are configuration figures, not a live token supply query.\n- A wallet allocation does not tell us whether tokens are locked, vested,\n  controlled by a particular person today or circulating. No allocation wallet,\n  vesting contract, unlock schedule or holder distribution is established here.\n- A market-cap estimate is price multiplied by a supply assumption. It is not\n  money deposited into the token, available exit liquidity or a price target.\n  Explain which supply is used when doing arithmetic; no invented current price.\n- The recorded 0% token-tax claim concerns token-level transfer taxation.\n  It does not mean swaps are free: network gas, venue fees, slippage and price\n  impact can still apply. No specific fee rate is established by this reference.\n\nLIQUIDITY AND CONTRACT CONTROL\n- A liquidity pool holds assets used for swaps. A larger trade relative to pool\n  depth can move the execution price. Slippage tolerance is a limit accepted by\n  the trader, not a guarantee of a particular price or protection from all loss.\n- Burning LP tokens, if verified, removes withdrawal rights represented by those\n  specific tokens. It does not prove every pool's liquidity is burned, eliminate\n  token selling, guarantee demand or establish the absence of contract flaws.\n- Renouncing ownership, if verified, relinquishes that particular owner role.\n  It does not by itself rule out other privileged roles, proxy upgrades or bugs.\n  No audit report is present. Never infer 'no backdoors' from an ownership claim.\n- Explain checks concretely when asked: exact chain and contract, verified source\n  and roles, LP-token holders and burn transactions, liquidity depth and holder\n  concentration. Do not say these checks were performed by this assistant.\n\nNFTS AND POSSIBLE ACCESS UTILITY\n- The recorded tiers are Gold (USD 60) and Silver (USD 30), with the configured\n  mint URL. This is a recorded offer, not verified current price or availability.\n- There is no established edition size, NFT contract, mint network, tier-specific\n  access entitlement, royalty, guaranteed airdrop or reward schedule here.\n  In a Gold/Silver comparison, the documented distinction is the listed price;\n  do not invent premium access, multipliers, voting power or greater returns.\n- In general, an NFT represents an individually identifiable blockchain token.\n  Metadata can describe a collectible or membership. Owning it does not itself\n  grant copyright, permanent hosting, financial rewards or legal ownership of\n  everything depicted. Actual rights depend on explicit terms and implementation.\n- Access via NFTs would require a service to verify ownership and enforce an\n  entitlement. That is a possible design, not implemented access gating here.\n\nPOLYGON, BASE AND THE ROADMAP\n- Explain Polygon as the original deployment named in this configuration and\n  Base as a proposed expansion. Do not invent a Base contract or bridge URL.\n- A second-chain deployment needs decisions about supply representation,\n  liquidity, contracts, security and user experience. These are open design\n  questions in this reference, not an approved implementation plan.\n- A holder has no documented migration action to take based on this file.\n  Do not instruct users to bridge or exchange tokens for an unverified launch.\n- Separate delivered backend capabilities (assistant, alert logic, moderation)\n  from planned broader monitoring, token/NFT utility and dedicated infrastructure.\n  A roadmap records direction; it does not establish delivery dates or funding.\n- The voluntary commitment concept is exploratory. No deployed locking contract,\n  minimum duration, withdrawal rules, fee share or reward entitlement is provided.\n  Do not rename it staking or invent APY. If asked how it could work, label any\n  example explicitly as a hypothetical design, not TBP's announced rules.\n\nPRACTICAL HELP AND LIMITS\n- For buying: use the configured Polygon token and Sushi destination, select the\n  correct network, check the exact contract, have network gas and inspect the\n  quoted output/price impact before signing. No wallet access is needed from the\n  user to explain these steps. Never recommend arbitrary slippage or fund size.\n- For NFTs: use the configured mint page and verify its actual network, contract,\n  current terms and transaction before signing; these details are not supplied.\n- For a failed transaction, ask for the public error message and relevant chain\n  if needed. Never ask for a seed phrase, private key or authentication secret.\n- Partnerships, listings, team identities, funding, audit status, active-user\n  counts and deployment milestones are unknown unless stated in this reference.\n  A configured link is not proof of a current listing or functioning service.\n- If asked for today's price/news or a newly completed milestone in an AI answer,\n  say the conversation has no verified live result. /price and /stats are the\n  backend's separate market-data routes. Do not pretend to browse or check a chain.\n"
+TBP_PUBLIC_KB += "\n\nDETAILED EXPLANATION NOTES — NOT ADDITIONAL VERIFIED PROJECT CLAIMS\nSource boundary: the uploaded server_TBP_Chatbot_verbessert.py is the source for\nproject configuration and recorded project statements. No whitepaper, audit,\nroadmap publication, holder register or independent chain verification is supplied.\nThe following explains those records and the code; it must not imply new features.\n\nWHAT THE COMPONENTS ACTUALLY DO\n- The website sends questions to /ask. Telegram messages arrive at /telegram.\n  Both use the same OpenAI-backed answering function and project reference.\n  The configured default is gpt-4o-mini; OPENAI_MODEL can override it. This is\n  an API-based assistant, not evidence of a proprietary TBP foundation model.\n- A useful example: a newcomer asks about TBP, then asks what the buy bot does.\n  Explain the relevant tool and its practical use instead of repeating a slogan\n  about an ecosystem. Do not claim that using the assistant requires holding TBP:\n  this backend contains no token-balance or NFT-access check for asking questions.\n- Buy alerts report detected purchases from an external pool-trades service.\n  They can contain purchase USD value, token amount, quote amount shown as POL,\n  a shortened wallet, transaction link and market snapshot. The NEW marker comes\n  from this process's known-wallet set, not a full historical holder analysis.\n  Restarting the process clears in-memory state. Polling, source limits and\n  outages can miss trades; alerts do not prove demand quality or investment merit.\n- Moderation matches text against patterns and tracks strikes. It does not audit\n  contracts, inspect wallets, verify identities or detect all fraudulent messages.\n  Exact protection depends on configuration and Telegram permissions. Never\n  describe rule-based filters as autonomous AI security or a security guarantee.\n- Chat memory, interest notes and response counters are in process memory;\n  they are not permanent memory or a persistent user profile. Do not promise\n  remembering somebody across restarts or deployments.\n\nRESPONSE MODES AND COMMUNITY FUNCTIONS\n- /0 permits every voluntary response opportunity; /1 every third; /2 every tenth.\n  These are opportunity counters, not scheduled intervals or an exact count of\n  all posted messages. Other reply eligibility and cooldown rules still apply.\n  Commands, moderation, genuine questions and direct replies are not silenced.\n  The selected mode is global in this backend; counters are separate per chat.\n- /price and /stats request market information; /chart opens charts; /links gives\n  configured project destinations; /nfts gives NFT information; /rules and\n  /security explain group rules; /id shows the chat ID; /about and /dev describe\n  the project and development direction. Welcome, image captions,\n  automatic updates, idle messages and buy alerts are separate from AI replies.\n\nTOKENOMICS: EXPLAIN THE NUMBERS, NOT JUST THE LABELS\n- Stored total: 190 billion TBP. Stored burned allocation: 10 billion. Stored\n  owner allocation: 14 billion. 190 - 10 - 14 = 166 billion is the code's simple\n  remainder. These are configuration figures, not a live token supply query.\n- A wallet allocation does not tell us whether tokens are locked, vested,\n  controlled by a particular person today or circulating. No allocation wallet,\n  vesting contract, unlock schedule or holder distribution is established here.\n- A market-cap estimate is price multiplied by a supply assumption. It is not\n  money deposited into the token, available exit liquidity or a price target.\n  Explain which supply is used when doing arithmetic; no invented current price.\n- The recorded 0% token-tax claim concerns token-level transfer taxation.\n  It does not mean swaps are free: network gas, venue fees, slippage and price\n  impact can still apply. No specific fee rate is established by this reference.\n\nLIQUIDITY AND CONTRACT CONTROL\n- A liquidity pool holds assets used for swaps. A larger trade relative to pool\n  depth can move the execution price. Slippage tolerance is a limit accepted by\n  the trader, not a guarantee of a particular price or protection from all loss.\n- Burning LP tokens, if verified, removes withdrawal rights represented by those\n  specific tokens. It does not prove every pool's liquidity is burned, eliminate\n  token selling, guarantee demand or establish the absence of contract flaws.\n- Renouncing ownership, if verified, relinquishes that particular owner role.\n  It does not by itself rule out other privileged roles, proxy upgrades or bugs.\n  No audit report is present. Never infer 'no backdoors' from an ownership claim.\n- Explain checks concretely when asked: exact chain and contract, verified source\n  and roles, LP-token holders and burn transactions, liquidity depth and holder\n  concentration. Do not say these checks were performed by this assistant.\n\nNFTS AND POSSIBLE ACCESS UTILITY\n- The recorded tiers are Gold (USD 60) and Silver (USD 30), with the configured\n  mint URL. This is a recorded offer, not verified current price or availability.\n- There is no established edition size, NFT contract, mint network, tier-specific\n  access entitlement, royalty, guaranteed airdrop or reward schedule here.\n  In a Gold/Silver comparison, the documented distinction is the listed price;\n  do not invent premium access, multipliers, voting power or greater returns.\n- In general, an NFT represents an individually identifiable blockchain token.\n  Metadata can describe a collectible or membership. Owning it does not itself\n  grant copyright, permanent hosting, financial rewards or legal ownership of\n  everything depicted. Actual rights depend on explicit terms and implementation.\n- Access via NFTs would require a service to verify ownership and enforce an\n  entitlement. That is a possible design, not implemented access gating here.\n\nPOLYGON, BASE AND THE ROADMAP\n- Explain Polygon as the original deployment named in this configuration and\n  Base as a proposed expansion. Do not invent a Base contract or bridge URL.\n- A second-chain deployment needs decisions about supply representation,\n  liquidity, contracts, security and user experience. These are open design\n  questions in this reference, not an approved implementation plan.\n- A holder has no documented migration action to take based on this file.\n  Do not instruct users to bridge or exchange tokens for an unverified launch.\n- Separate delivered backend capabilities (assistant, alert logic, moderation)\n  from planned broader monitoring, token/NFT utility and dedicated infrastructure.\n  A roadmap records direction; it does not establish delivery dates or funding.\n- The voluntary commitment concept is exploratory. No deployed locking contract,\n  minimum duration, withdrawal rules, fee share or reward entitlement is provided.\n  Do not rename it staking or invent APY. If asked how it could work, label any\n  example explicitly as a hypothetical design, not TBP's announced rules.\n\nPRACTICAL HELP AND LIMITS\n- For buying: use the configured Polygon token and Sushi destination, select the\n  correct network, check the exact contract, have network gas and inspect the\n  quoted output/price impact before signing. No wallet access is needed from the\n  user to explain these steps. Never recommend arbitrary slippage or fund size.\n- For NFTs: use the configured mint page and verify its actual network, contract,\n  current terms and transaction before signing; these details are not supplied.\n- For a failed transaction, ask for the public error message and relevant chain\n  if needed. Never ask for a seed phrase, private key or authentication secret.\n- Partnerships, listings, team identities, funding, audit status, active-user\n  counts and deployment milestones are unknown unless stated in this reference.\n  A configured link is not proof of a current listing or functioning service.\n- If asked for today's price/news or a newly completed milestone in an AI answer,\n  say the conversation has no verified live result. /price and /stats are the\n  backend's separate market-data routes. Do not pretend to browse or check a chain.\n"
 
 # TBP Supply für grobe MC-Schätzung (nur Info, nicht kritisch)
 MAX_SUPPLY  = 190_000_000_000
@@ -115,9 +115,6 @@ MEM = {
     "ctx": [],                 # globaler Kontext (Web AI), keep small
     "last_autopost": None,
     "chat_count": 0,
-    "raid_on": False,          # legacy placeholder; active raids are per chat in raids
-    "raids": {},
-    "raid_msg": "Drop a fresh TBP meme! 🐸⚡",
     "interject_log": {},        # chat_id -> deque[timestamps]
 
     # Throttle:
@@ -884,7 +881,7 @@ is not verification of its current contents. Never request wallet secrets.
 Output plain text with short paragraphs and optional bullets; do not output HTML tags.
 """
     system_msg += "\n\n" + TBP_PUBLIC_KB
-    system_msg += "\nCOMMUNITY RAID FEATURE: Admins use /raid followed by an optional duration (1h or 2h), an HTTPS X-post URL and an optional message. Default duration is 1 hour; 2h selects 2 hours. At most two reminders occur after one third and two thirds of the duration. /raidstatus shows the target and voluntary participation reports, /raiddone records one report per Telegram user, /raidstop ends it. Reports are not verified likes or reposts. State is per chat and resets on restart. The server never acts on X for users."
+    system_msg += "\nRAIDS: This assistant has no raid management, raid timer or participation counter. Raids in this group are handled by the separate Raidar bot. Do not claim access to its state or give the removed 1h/2h command syntax. Answer explicit questions about raids briefly; otherwise do not volunteer raid instructions or comment on shared X links."
     system_msg += "\nCONFIGURED PROJECT DESTINATIONS:\n" + json.dumps(LINKS, ensure_ascii=False)
     system_msg += "\nConfigured assistant model: " + OPENAI_MODEL
     if response_instruction:
@@ -1389,168 +1386,6 @@ def maybe_idle_prompt(chat_id, now=None):
 
 
 
-# Community raids are Telegram announcements for a public X post. Participation
-# is self-reported; this server never likes, replies to or reposts anything on X.
-RAID_LOCK = threading.RLock()
-RAID_DURATION_SEC = 60 * 60
-
-
-def raid_url(value):
-    from urllib.parse import urlsplit
-    try:
-        parsed = urlsplit(value.strip())
-        if parsed.scheme != "https" or parsed.username or parsed.password or parsed.port:
-            return None
-        if parsed.hostname not in {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}:
-            return None
-        match = re.fullmatch(r"/(?:[a-zA-Z0-9_]{1,15}/status|i/web/status)/(\d{1,25})/?", parsed.path)
-        if not match:
-            return None
-        # Drop tracking parameters; preserve only the verified public-post path.
-        return "https://x.com" + parsed.path.rstrip("/")
-    except (ValueError, AttributeError):
-        return None
-
-
-def raid_card(raid, now=None, title=None):
-    from html import escape
-    now = now or datetime.utcnow()
-    lang = raid['lang']
-    minutes = max(0, int((raid['ends_at'] - now).total_seconds() + 59) // 60)
-    title = title or say(lang, "🚀 TBP Community-Raid", "🚀 TBP community raid")
-    lines = [escape(title), "", escape(raid['message']), "", say(lang,
-        "Schaut euch den Post an. Wenn ihr mögt, unterstützt ihn mit einem Like, Repost oder einem eigenen, passenden Kommentar.",
-        "Take a look at the post. If you like, support it with a like, repost or your own relevant comment."),
-        "", say(lang, f"Noch etwa {minutes} Min. · Teilnahmemeldungen: {len(raid['participants'])}",
-                f"About {minutes} min left · Participation reports: {len(raid['participants'])}"),
-        say(lang, "Danach /raiddone senden. Die Meldungen sind freiwillig und nicht über X geprüft.",
-            "Send /raiddone afterwards. Reports are voluntary and not verified through X.")]
-    return "\n".join(lines)
-
-
-def process_raid_tick(chat_id, now=None):
-    now = now or datetime.utcnow()
-    with RAID_LOCK:
-        raid = MEM.setdefault('raids', {}).get(chat_id)
-        if not raid or not raid['active']:
-            return False
-        lang = raid['lang']
-        if now >= raid['ends_at']:
-            raid['active'] = False
-            MEM.setdefault('last_idle', {})[chat_id] = now
-            output = say(lang,
-                f"🏁 Community-Raid beendet. Danke fürs Mitmachen! {len(raid['participants'])} freiwillige Teilnahmemeldungen (nicht über X geprüft).",
-                f"🏁 Community raid finished. Thanks for joining! {len(raid['participants'])} voluntary participation reports (not verified through X).")
-            url = None
-        elif now >= raid['next_reminder'] and raid['reminders'] < 2:
-            raid['reminders'] += 1
-            raid['next_reminder'] = now + timedelta(seconds=raid['reminder_interval'])
-            output = raid_card(raid, now, say(lang, "🐸 Community-Raid läuft noch", "🐸 Community raid is still running"))
-            url = raid['url']
-        else:
-            return True
-    if url:
-        tg_buttons(chat_id, output, [(say(lang, "Zum X-Post", "Open X post"), url)])
-    else:
-        tg_send(chat_id, output, preview=False)
-    return True
-
-
-def handle_raid_command(text, chat_id, user_id, msg, lang):
-    text = text.strip()
-    if re.fullmatch(r"raid[.!]?", text, re.I):
-        text = '/raid'
-    elif re.match(r"^raid\s+(?:(?:1h|2h)\s+)?https://", text, re.I):
-        text = '/' + text
-    match = re.fullmatch(r"/(raid|raidstatus|raidstop|raiddone)(?:@[a-zA-Z0-9_]+)?(?:\s+([\s\S]*))?", text.strip(), re.I)
-    if not match:
-        return False
-    command = match.group(1).lower()
-    argument = (match.group(2) or '').strip()
-    reply_to = msg.get('message_id')
-    if command == 'raid' and argument.lower() in {'stop', 'status'}:
-        command, argument = 'raid' + argument.lower(), ''
-    # Authorization is identical to the existing mode-switch authorization.
-    if command == 'raidstop' or (command == 'raid' and argument):
-        if not can_change_mode(chat_id, user_id, msg):
-            tg_send(chat_id, say(lang, "Nur Admins können Raids starten oder stoppen.",
-                                "Only admins can start or stop raids."), reply_to=reply_to)
-            return True
-    if command == 'raid' and argument:
-        parts = argument.split(None, 1)
-        duration = RAID_DURATION_SEC
-        if parts[0].lower() in {'1h', '2h'}:
-            duration = int(parts[0][0]) * 60 * 60
-            parts = parts[1].split(None, 1) if len(parts) > 1 else ['']
-        url = raid_url(parts[0])
-        if not url:
-            tg_send(chat_id, say(lang,
-                "Nutze /raid 1h oder /raid 2h mit einem gültigen HTTPS-Link zu einem X-Post: /raid 2h https://x.com/Name/status/123 Optionaler Aufruf. Ohne Zeitangabe: 1 Stunde.",
-                "Use /raid 1h or /raid 2h with an HTTPS link to an X post: /raid 2h https://x.com/Name/status/123 Optional message. Default: 1 hour."), reply_to=reply_to)
-            return True
-        message = parts[1].strip() if len(parts) > 1 else say(lang,
-            "TBP-Community, dieser Post wartet auf eure Ideen 🐸", "TBP community, bring your ideas to this post 🐸")
-        if len(message) > 500:
-            tg_send(chat_id, say(lang, "Der Raid-Aufruf darf höchstens 500 Zeichen haben.",
-                                "The raid message may contain at most 500 characters."), reply_to=reply_to)
-            return True
-        now = datetime.utcnow()
-        with RAID_LOCK:
-            existing = MEM.setdefault('raids', {}).get(chat_id)
-            if existing and existing['active'] and now < existing['ends_at']:
-                output = say(lang, "Es läuft bereits ein Raid. Nutze /raidstatus oder zuerst /raidstop.",
-                             "A raid is already running. Use /raidstatus or /raidstop first.")
-                buttons = None
-            else:
-                raid = {'active': True, 'url': url, 'message': message, 'lang': lang,
-                        'started_at': now, 'ends_at': now + timedelta(seconds=duration),
-                        'reminder_interval': duration // 3,
-                        'next_reminder': now + timedelta(seconds=duration // 3),
-                        'reminders': 0, 'participants': set()}
-                MEM['raids'][chat_id] = raid
-                output = raid_card(raid, now)
-                buttons = [(say(lang, "Zum X-Post", "Open X post"), url)]
-        if buttons:
-            tg_buttons(chat_id, output, buttons)
-        else:
-            tg_send(chat_id, output, reply_to=reply_to)
-        return True
-    with RAID_LOCK:
-        raid = MEM.setdefault('raids', {}).get(chat_id)
-        active = bool(raid and raid['active'] and datetime.utcnow() < raid['ends_at'])
-        buttons = None
-        if command == 'raidstop':
-            if raid:
-                raid['active'] = False
-                MEM.setdefault('last_idle', {})[chat_id] = datetime.utcnow()
-            output = say(lang, "Raid gestoppt. Es folgen keine weiteren Raid-Erinnerungen.",
-                         "Raid stopped. No further raid reminders will be sent.")
-        elif command == 'raiddone':
-            if not active:
-                output = say(lang, "Gerade läuft kein Raid.", "No raid is running right now.")
-            elif user_id is None or msg.get('sender_chat'):
-                output = say(lang, "Bitte melde die Teilnahme über dein persönliches Telegram-Profil.",
-                             "Please report participation from your personal Telegram profile.")
-            else:
-                already = user_id in raid['participants']
-                raid['participants'].add(user_id)
-                output = say(lang,
-                    "Deine Teilnahme ist bereits erfasst." if already else "Danke! Deine freiwillige Teilnahmemeldung ist erfasst 🐸",
-                    "Your participation is already recorded." if already else "Thanks! Your voluntary participation report is recorded 🐸")
-        elif active:
-            output = raid_card(raid)
-            buttons = [(say(lang, "Zum X-Post", "Open X post"), raid['url'])]
-        else:
-            output = say(lang,
-                "Kein aktiver Raid. Admins starten einen Raid mit:\n/raid 1h https://x.com/Name/status/123 Optionaler Aufruf\nFür 2 Stunden: /raid 2h Link\nOhne Zeitangabe: 1 Stunde.\n\n/raidstatus · /raiddone · /raidstop\nMaximal zwei Erinnerungen. Der Status wird bei einem Serverneustart zurückgesetzt.",
-                "No active raid. Admins can start a raid with:\n/raid 1h https://x.com/Name/status/123 Optional message\nFor 2 hours: /raid 2h Link\nDefault duration: 1 hour.\n\n/raidstatus · /raiddone · /raidstop\nAt most two reminders. State resets when the server restarts.")
-    if buttons:
-        tg_buttons(chat_id, output, buttons)
-    else:
-        tg_send(chat_id, output, reply_to=reply_to, preview=False)
-    return True
-
-
 def start_idle_watchdog_background():
     def loop():
         while True:
@@ -1558,8 +1393,7 @@ def start_idle_watchdog_background():
                 now = datetime.utcnow()
                 for chat_id in list(MEM.get("last_activity", {})):
                     if chat_id:
-                        if not process_raid_tick(chat_id, now):
-                            maybe_idle_prompt(chat_id, now)
+                        maybe_idle_prompt(chat_id, now)
             except Exception as exc:
                 print("[IDLE] loop error:", type(exc).__name__)
             time.sleep(30)
@@ -1685,6 +1519,22 @@ def handle_extra_commands(text, chat_id, lang, msg_id=None):
 
     return False
 
+def is_raidar_traffic(text):
+    """Leave raid commands and bare X links to the separate Raidar bot."""
+    from urllib.parse import urlsplit
+    t = (text or '').strip()
+    if re.match(r'^/(?:raid|raidstatus|raidstop|raiddone)(?:@[a-zA-Z0-9_]+)?(?:\s|$)', t, re.I):
+        return True
+    if re.fullmatch(r'raid[.!]?', t, re.I) or re.match(r'^raid\s+(?:(?:1h|2h)\s+)?https://', t, re.I):
+        return True
+    if re.fullmatch(r'https?://\S+', t, re.I):
+        try:
+            return urlsplit(t).hostname in {'x.com', 'www.x.com', 'twitter.com', 'www.twitter.com'}
+        except ValueError:
+            pass
+    return False
+
+
 def telegram_bot_identity():
     """Resolve our own identity once per hour, without logging the token."""
     now = time.time()
@@ -1724,6 +1574,8 @@ def telegram_webhook():
 
     media = message_media(msg)
     text    = (msg.get("text") or msg.get("caption") or "").strip()
+    if is_raidar_traffic(text):
+        return jsonify({"ok": True})
     msg_id  = msg.get("message_id")
     new_members = msg.get("new_chat_members") or []
 
@@ -1818,9 +1670,6 @@ def telegram_webhook():
         tg_send(chat_id, f"TBP-AI Modus /{MEM['resp_mode']} aktiviert: {descriptions[MEM['resp_mode']]}", reply_to=msg_id)
         return jsonify({"ok": True})
 
-    if handle_raid_command(text, chat_id, user_id, msg, lang):
-        return jsonify({"ok": True})
-
     if is_update_request(text):
         send_tbp_update(chat_id, lang)
         return jsonify({"ok": True})
@@ -1835,7 +1684,7 @@ def telegram_webhook():
         return jsonify({"ok": True})
 
     if low.startswith("/help"):
-        tg_send(chat_id, "/price • /stats • /update • /chart • /links • /nfts • /rules • /security • /id • /about • /dev • /0 • /1 • /2 • /raid • /raidstatus • /raiddone • /raidstop", reply_to=msg_id, preview=False)
+        tg_send(chat_id, "/price • /stats • /update • /chart • /links • /nfts • /rules • /security • /id • /about • /dev • /0 • /1 • /2", reply_to=msg_id, preview=False)
         return jsonify({"ok": True})
 
     if low.startswith("/about") or low.startswith("/dev"):
