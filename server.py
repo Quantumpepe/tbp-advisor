@@ -970,17 +970,72 @@ def human_delay_for(text: str):
 # =========================
 
 UPDATE_LOCK = threading.RLock()
-UPDATE_INTERVAL = timedelta(hours=2)
+UPDATE_INTERVAL = timedelta(hours=24)
 
 
-def autopost_needed(now=None):
+def update_state_path():
+    import os
+    # For containers, point TBP_UPDATE_STATE_DB at a persistent local volume.
+    # All workers sending to this group must share this file.
+    return os.environ.get('TBP_UPDATE_STATE_DB') or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), 'tbp_update_state.sqlite3')
+
+
+def reserve_update_slot(chat_id, automatic, now=None, request_id=None, check_only=False):
+    import sqlite3
+    from datetime import timezone
     now = now or datetime.utcnow()
-    last = MEM.get("last_autopost")
-    if not last:
-        # Start a full interval, never emit an update on the first user question.
-        MEM['last_autopost'] = now
+    stamp = (now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now).timestamp()
+    db = None
+    try:
+        db = sqlite3.connect(update_state_path(), timeout=5)
+        # A durable transaction prevents two workers from reserving the same due update.
+        db.execute('BEGIN IMMEDIATE')
+        db.execute('CREATE TABLE IF NOT EXISTS update_schedule '
+                   '(chat_id TEXT PRIMARY KEY, last_reserved REAL NOT NULL)')
+        db.execute('CREATE TABLE IF NOT EXISTS update_requests '
+                   '(chat_id TEXT NOT NULL, request_id TEXT NOT NULL, reserved_at REAL NOT NULL, '
+                   'PRIMARY KEY (chat_id, request_id))')
+        key = str(chat_id)
+        row = db.execute('SELECT last_reserved FROM update_schedule WHERE chat_id=?', (key,)).fetchone()
+        if row is None:
+            db.execute('INSERT INTO update_schedule VALUES (?, ?)', (key, stamp))
+            if automatic:
+                db.commit()
+                return False  # First activity starts a full 24h wait; no startup blast.
+        elif automatic and stamp - row[0] < UPDATE_INTERVAL.total_seconds():
+            db.commit()
+            return False
+        if check_only:
+            db.commit()
+            return True
+        if not automatic and request_id is not None:
+            # Telegram can retry a webhook. A request is keyed by chat + message ID.
+            inserted = db.execute('INSERT OR IGNORE INTO update_requests VALUES (?, ?, ?)',
+                                  (key, str(request_id), stamp)).rowcount
+            if not inserted:
+                db.commit()
+                return False
+        db.execute('UPDATE update_schedule SET last_reserved=? WHERE chat_id=?', (stamp, key))
+        db.commit()
+        MEM['last_autopost'] = now  # Diagnostic only; the database is authoritative.
+        return True
+    except (sqlite3.Error, OSError) as exc:
+        # Fail closed: do not fall back to unsynchronised automatic posts.
+        if db:
+            db.rollback()
+        print('[TBP UPDATE] state unavailable; update suppressed:', type(exc).__name__)
         return False
-    return (now - last) >= UPDATE_INTERVAL
+    finally:
+        if db:
+            db.close()
+
+
+def autopost_needed(now=None, chat_id=None):
+    chat_id = chat_id if chat_id is not None else MEM.get('tbp_chat_id')
+    if chat_id is None:
+        return False
+    return reserve_update_slot(chat_id, True, now=now, check_only=True)
 
 
 def is_update_request(text):
@@ -990,13 +1045,10 @@ def is_update_request(text):
         r'(?:tbp[- ]?)?update(?: (?:bitte|please))?[.!?]?', t, re.I))
 
 
-def send_tbp_update(chat_id, lang='en', automatic=False, now=None):
-    now = now or datetime.utcnow()
-    with UPDATE_LOCK:
-        if automatic and not autopost_needed(now):
-            return False
-        # Explicit requests also postpone the next automatic update for two hours.
-        MEM['last_autopost'] = now
+def send_tbp_update(chat_id, lang='en', automatic=False, now=None, request_id=None):
+    if not reserve_update_slot(chat_id, automatic, now=now, request_id=request_id):
+        return False
+    # Reserve before sending: uncertain network outcomes must not cause repeated blasts.
     tg_send(chat_id, autopost_text(lang))
     return True
 
@@ -1027,17 +1079,21 @@ def autopost_text(lang="en"):
     return "\n".join(lines)
 
 def start_autopost_background(chat_id: int):
+    # Do not start duplicate threads when two incoming messages arrive together.
     with UPDATE_LOCK:
-        autopost_needed()
-    def loop():
-        while True:
-            try:
-                send_tbp_update(chat_id, community_language(chat_id), automatic=True)
-            except Exception:
-                pass
-            time.sleep(60)
+        if MEM.get('_autopost_started'):
+            return
+        autopost_needed(chat_id=chat_id)
+        def loop():
+            while True:
+                try:
+                    send_tbp_update(chat_id, community_language(chat_id), automatic=True)
+                except Exception as exc:
+                    print('[TBP UPDATE] automatic update failed:', type(exc).__name__)
+                time.sleep(60)
+        threading.Thread(target=loop, daemon=True).start()
+        MEM['_autopost_started'] = True
 
-    threading.Thread(target=loop, daemon=True).start()
 
 # =========================
 # =========================
@@ -1637,7 +1693,6 @@ def telegram_webhook():
     try:
         if MEM.get("_autopost_started") != True:
             start_autopost_background(chat_id)
-            MEM["_autopost_started"] = True
     except Exception:
         pass
 
@@ -1675,7 +1730,7 @@ def telegram_webhook():
         return jsonify({"ok": True})
 
     if is_update_request(text):
-        send_tbp_update(chat_id, lang)
+        send_tbp_update(chat_id, lang, request_id=msg_id)
         return jsonify({"ok": True})
 
     # Commands
