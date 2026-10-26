@@ -1331,7 +1331,14 @@ IDLE_MESSAGES_TBP = [
     "Yo TBP crew… Quiet here for a moment 👀🐸",
     "Silence detected. Drop a meme or a question 😎",
     "Reminder: TBP AI + BuyBot is running – who has already checked the chart today? 📈",
-    "🪙 TBP-AI NFTs are live (Gold $60 / Silver $30). Mint: https://quantumpepe.github.io/NFTs-WalletConnectV2/ 🐸",
+    "🪙 TBP-AI NFTs: recorded Gold $60 / Silver $30. Check current prices and availability: https://quantumpepe.github.io/NFTs-WalletConnectV2/ 🐸",
+]
+
+IDLE_MESSAGES_TBP_DE = [
+    "Hey TBP-Crew … hier ist es gerade etwas ruhig 👀🐸",
+    "Ganz schön still hier. Schickt ein Meme oder stellt eine Frage 😎",
+    "TBP AI + BuyBot sind am Start — wer hat heute schon in den Chart geschaut? 📈",
+    "🪙 TBP-AI NFTs: hinterlegt sind Gold $60 / Silver $30. Aktuelle Preise und Verfügbarkeit: https://quantumpepe.github.io/NFTs-WalletConnectV2/ 🐸",
 ]
 
 
@@ -1370,17 +1377,11 @@ def community_line(chat_id, category, lang):
                    "Words appear to be on vacation 🐸",
                    "Okay, who's got the caption for this one? 😄",
                    "The chat now officially communicates in memes."]},
-        "idle": {
-            "de": ["Kleine Runde: Was sollte der TBP-Bot als Nächstes besser können?",
-                   "Meme-Challenge: Beschreibt euren Tag mit genau einem Sticker 🐸",
-                   "Welche Frage zu TBP ist bisher noch offen geblieben?",
-                   "Wer hat eine gute Idee für ein Community-Meme?"],
-            "en": ["Quick round: what should the TBP bot get better at next?",
-                   "Meme challenge: describe your day with exactly one sticker 🐸",
-                   "Which question about TBP still needs an answer?",
-                   "Anyone got an idea for a community meme?"]}}
+    }
     previous = MEM.setdefault("community_last_line", {}).get((chat_id, category))
-    options = [x for x in choices[category][lang] if x != previous]
+    # Reconnect the original automatic quiet-chat sayings, not the newer prompt pool.
+    pool = (IDLE_MESSAGES_TBP_DE if lang == 'de' else IDLE_MESSAGES_TBP) if category == 'idle' else choices[category][lang]
+    options = [x for x in pool if x != previous]
     out = random.choice(options)
     MEM["community_last_line"][(chat_id, category)] = out
     return out
@@ -1425,25 +1426,61 @@ def react_to_media(chat_id, msg, media, user_id, name, replied_to_bot=False):
     MEM["last_interject"][chat_id] = datetime.utcnow()
 
 
+def reserve_community_line(chat_id, lang, now, interval, daily_limit):
+    import sqlite3
+    from datetime import timezone
+    stamp = (now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now).timestamp()
+    db = None
+    try:
+        db = sqlite3.connect(update_state_path(), timeout=5)
+        db.execute('BEGIN IMMEDIATE')
+        db.execute('CREATE TABLE IF NOT EXISTS community_pulses '
+                   '(chat_id TEXT NOT NULL, posted_at REAL NOT NULL, text TEXT NOT NULL)')
+        key = str(chat_id)
+        previous = db.execute('SELECT posted_at, text FROM community_pulses '
+                              'WHERE chat_id=? ORDER BY posted_at DESC LIMIT 1', (key,)).fetchone()
+        count = db.execute('SELECT COUNT(*) FROM community_pulses WHERE chat_id=? AND posted_at>?',
+                           (key, stamp - 86400)).fetchone()[0]
+        if count >= daily_limit or (previous and stamp - previous[0] < interval):
+            db.commit()
+            return None
+        if previous:
+            MEM.setdefault('community_last_line', {})[(chat_id, 'idle')] = previous[1]
+        line = community_line(chat_id, 'idle', lang)
+        db.execute('INSERT INTO community_pulses VALUES (?, ?, ?)', (key, stamp, line))
+        db.execute('DELETE FROM community_pulses WHERE chat_id=? AND posted_at<?', (key, stamp - 86400))
+        db.commit()
+        return line
+    except (sqlite3.Error, OSError) as exc:
+        if db:
+            db.rollback()
+        print('[COMMUNITY] state unavailable; prompt suppressed:', type(exc).__name__)
+        return None
+    finally:
+        if db:
+            db.close()
+
+
 def maybe_idle_prompt(chat_id, now=None):
     now = now or datetime.utcnow()
     last = MEM.get("last_activity", {}).get(chat_id)
     if not isinstance(last, datetime):
         return False
-    mode = str(MEM.get("resp_mode", "0"))
-    quiet_for, interval = {"0": (600, 3600), "1": (1800, 7200), "2": (3600, 14400)}.get(mode, (600, 3600))
-    previous = MEM.get("last_idle", {}).get(chat_id)
-    # One invitation per period of silence, not endless nudges in an abandoned group.
-    if previous and (previous >= last or (now - previous).total_seconds() < interval):
-        return False
+    # Original quiet-chat timing, independent of /0 /1 /2 and market updates.
+    quiet_for, interval, daily_limit = 600, 3600, 24
     if (now - last).total_seconds() < quiet_for:
         return False
+    recent = MEM.get('last_interject', {}).get(chat_id)
+    if recent and (now - recent).total_seconds() < quiet_for:
+        return False
     lang = community_language(chat_id)
-    tg_ai_send(chat_id, community_line(chat_id, "idle", lang), preview=False)
+    line = reserve_community_line(chat_id, lang, now, interval, daily_limit)
+    if not line:
+        return False
+    tg_ai_send(chat_id, line, preview=False)
     MEM.setdefault("last_idle", {})[chat_id] = now
     MEM["last_interject"][chat_id] = now
     return True
-
 
 
 def start_idle_watchdog_background():
