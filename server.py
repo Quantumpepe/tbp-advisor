@@ -840,7 +840,10 @@ def call_openai(question: str, context, mode: str = "tbp", channel: str = "tg",
     if not OPENAI_API_KEY:
         return None
     system_msg = """You are TBP-AI, the TurboPepe-AI project assistant.
-Use the language of the actual user message, not the language of surrounding instructions.
+Default to English. Answer in German only when the actual current user message or
+media caption is in German. Never inherit German from earlier conversation, names,
+quoted replies, sticker metadata or surrounding context. Images and stickers without
+a German caption receive English reactions. Follow the explicit RESPONSE TASK language.
 Answer the exact question immediately. Be natural, specific and helpful, without sales copy,
 repeated greetings, forced jokes, canned enthusiasm or a disclaimer after every paragraph.
 
@@ -1359,11 +1362,8 @@ def message_media(msg):
 
 
 def community_language(chat_id, text=""):
-    if text and re.search(r"[a-zA-ZäöüÄÖÜß]{2}", text):
-        lang = "de" if is_de(text) else "en"
-        MEM.setdefault("chat_language", {})[chat_id] = lang
-        return lang
-    return MEM.get("chat_language", {}).get(chat_id, "de")
+    # Only the current text can select German. No remembered group language.
+    return "de" if text and is_de(text) else "en"
 
 
 def community_line(chat_id, category, lang):
